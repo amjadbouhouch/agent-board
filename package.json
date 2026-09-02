@@ -1,0 +1,64 @@
+{
+  "name": "agent-board",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open-source runtime for agent-created data applications — CLI and HTTP runtime",
+  "license": "Apache-2.0",
+  "author": "Amjad Bouhouch",
+  "homepage": "https://github.com/amjadbouhouch/agent-board#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amjadbouhouch/agent-board.git"
+  },
+  "bugs": {
+    "url": "https://github.com/amjadbouhouch/agent-board/issues"
+  },
+  "keywords": [
+    "agent",
+    "ai-agent",
+    "sqlite",
+    "dashboard",
+    "low-code",
+    "internal-tools",
+    "runtime",
+    "declarative",
+    "cli",
+    "bun"
+  ],
+  "type": "module",
+  "bin": {
+    "agent-board": "src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/server/index.ts",
+    "./cli": "./src/cli.ts"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "files": [
+    "src",
+    "install.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "cli": "bun run src/cli.ts",
+    "start": "bun run src/cli.ts start",
+    "build": "bun build --compile --minify --bytecode src/cli.ts --outfile dist/agent-board",
+    "build:linux-x64": "bun build --compile --minify --bytecode --target=bun-linux-x64 src/cli.ts --outfile dist/agent-board-linux-x64",
+    "build:linux-arm64": "bun build --compile --minify --bytecode --target=bun-linux-arm64 src/cli.ts --outfile dist/agent-board-linux-arm64",
+    "build:darwin-arm64": "bun build --compile --minify --bytecode --target=bun-darwin-arm64 src/cli.ts --outfile dist/agent-board-darwin-arm64",
+    "build:darwin-x64": "bun build --compile --minify --bytecode --target=bun-darwin-x64 src/cli.ts --outfile dist/agent-board-darwin-x64",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "install:local": "./install.sh --local",
+    "release": "commit-and-tag-version",
+    "release:dry": "commit-and-tag-version --dry-run"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "commit-and-tag-version": "^13.1.2"
+  }
+}

@@ -1,0 +1,37 @@
+name: CI
+
+# Releases are gated by the test job in release.yml, so this does not duplicate
+# it on every push. It covers pull requests and manual runs.
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        # Compiles standalone binaries and spawns real servers, so it needs
+        # more than the usual unit-test budget.
+        run: bun test --timeout 60000
+
+      - name: Verify the release build compiles
+        run: bun run build
+
+      - name: Verify install.sh is valid POSIX sh
+        run: sh -n install.sh

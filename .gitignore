@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Runtime data — workspaces hold user databases and published applications
+workspaces/
+agent-board.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.tar.gz
+
+# Local notes and scratch space
+.cache/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store

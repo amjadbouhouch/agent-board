@@ -1,0 +1,8 @@
+# Normalise line endings so a Windows checkout does not corrupt sources.
+* text=auto eol=lf
+
+# The installer must keep LF endings or `sh` fails on the shebang.
+install.sh text eol=lf
+
+# Lockfile is generated; keep it out of diffs and language stats.
+bun.lock linguist-generated=true

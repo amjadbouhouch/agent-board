@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to publish (e.g. v0.1.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # Nothing is built or published until the suite passes: release.yml is the
+  # only workflow that runs on the way to a user's machine.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun run typecheck
+
+      - run: bun test --timeout 60000
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Asset names must match what install.sh looks for:
+        # agent-board-<os>-<arch>
+        include:
+          - target: bun-linux-x64
+            asset: agent-board-linux-x64
+          - target: bun-linux-arm64
+            asset: agent-board-linux-arm64
+          - target: bun-darwin-x64
+            asset: agent-board-darwin-x64
+          - target: bun-darwin-arm64
+            asset: agent-board-darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Compile ${{ matrix.asset }}
+        run: |
+          bun build --compile --minify --bytecode \
+            --target=${{ matrix.target }} \
+            src/cli.ts --outfile dist/${{ matrix.asset }}
+
+      - name: Checksum
+        # install.sh fetches this and refuses to install on a mismatch.
+        run: |
+          cd dist
+          sha256sum ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.asset }}.sha256
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: dist/*
