@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { cp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir } from "node:fs/promises";
+import { readJson, writeJsonAtomic } from "./fs.ts";
 import { join } from "node:path";
 import { checkpoint, create as createDatabase } from "./db.ts";
 import { CliError } from "./config.ts";
@@ -87,18 +88,18 @@ export async function createWorkspace(
     actions: [],
     theme: {},
   };
-  await writeFile(ws.applicationPath, JSON.stringify(emptyApplication, null, 2) + "\n");
-  await writeFile(join(ws.root, "permissions.json"), JSON.stringify({ roles: {} }, null, 2) + "\n");
-  await writeFile(join(ws.root, "workflows.json"), JSON.stringify({ workflows: [] }, null, 2) + "\n");
+  await writeJsonAtomic(ws.applicationPath, emptyApplication);
+  await writeJsonAtomic(join(ws.root, "permissions.json"), { roles: {} });
+  await writeJsonAtomic(join(ws.root, "workflows.json"), { workflows: [] });
   return ws;
 }
 
 export async function readMetadata(ws: Workspace): Promise<WorkspaceMetadata> {
-  return JSON.parse(await readFile(ws.metadataPath, "utf8"));
+  return readJson<WorkspaceMetadata>(ws.metadataPath);
 }
 
 export async function writeMetadata(ws: Workspace, metadata: WorkspaceMetadata): Promise<void> {
-  await writeFile(ws.metadataPath, JSON.stringify(metadata, null, 2) + "\n");
+  await writeJsonAtomic(ws.metadataPath, metadata);
 }
 
 export async function listWorkspaces(workspacesDir: string): Promise<string[]> {
@@ -134,7 +135,7 @@ export async function createSnapshot(ws: Workspace, reason: string): Promise<Sna
     appVersion: metadata.appVersion,
     createdAt: new Date().toISOString(),
   };
-  await writeFile(join(dir, "snapshot.json"), JSON.stringify(info, null, 2) + "\n");
+  await writeJsonAtomic(join(dir, "snapshot.json"), info);
   return info;
 }
 
@@ -146,7 +147,7 @@ export async function listSnapshots(ws: Workspace): Promise<SnapshotInfo[]> {
     if (!entry.isDirectory()) continue;
     const infoPath = join(ws.snapshotsDir, entry.name, "snapshot.json");
     if (!existsSync(infoPath)) continue;
-    infos.push(JSON.parse(await readFile(infoPath, "utf8")));
+    infos.push(await readJson<SnapshotInfo>(infoPath));
   }
   return infos.sort((a, b) => a.seq - b.seq);
 }

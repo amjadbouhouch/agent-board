@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
+import { readJson, writeFileAtomic, writeJsonAtomic } from "./fs.ts";
 import { join } from "node:path";
 import { CliError } from "./config.ts";
 import { createSnapshot, readMetadata, writeMetadata, type Workspace } from "./workspace.ts";
@@ -45,7 +46,7 @@ export async function listApplicationVersionRecords(
 ): Promise<ApplicationVersionRecord[]> {
   const path = ledgerPath(ws);
   if (!existsSync(path)) return [];
-  const records: ApplicationVersionRecord[] = JSON.parse(await readFile(path, "utf8"));
+  const records = await readJson<ApplicationVersionRecord[]>(path);
   return records.sort((a, b) => a.version - b.version);
 }
 
@@ -55,7 +56,23 @@ export async function readApplicationVersion(ws: Workspace, version: number): Pr
     const available = (await listApplicationVersions(ws)).join(", ") || "none";
     throw new CliError(`Application version ${version} not found. Available: ${available}.`);
   }
-  return JSON.parse(await readFile(path, "utf8"));
+  return readJson(path);
+}
+
+/**
+ * The specification currently in force. Derived from `metadata.appVersion`
+ * rather than read from application.json, which is what makes the single
+ * metadata write the commit point: a publish interrupted before it leaves every
+ * reader on the previous version.
+ */
+export async function readCurrentApplication(ws: Workspace): Promise<unknown> {
+  const { appVersion } = await readMetadata(ws);
+  if (appVersion > 0) {
+    const path = applicationVersionPath(ws, appVersion);
+    if (existsSync(path)) return readJson(path);
+  }
+  // Version 0 is the empty scaffold written when the workspace was created.
+  return readJson(ws.applicationPath);
 }
 
 /**
@@ -88,8 +105,11 @@ export async function publishSpec(
   const body = JSON.stringify(spec, null, 2) + "\n";
 
   await mkdir(applicationsDir(ws), { recursive: true });
-  await writeFile(applicationVersionPath(ws, version), body);
-  await writeFile(ws.applicationPath, body);
+
+  // Everything below is inert until the final metadata write commits it: an
+  // unreferenced history file and its ledger entry are ignored by readers, and
+  // the version number they consumed is never reused.
+  await writeFileAtomic(applicationVersionPath(ws, version), body);
 
   const records = await listApplicationVersionRecords(ws);
   records.push({
@@ -98,7 +118,11 @@ export async function publishSpec(
     createdAt: new Date().toISOString(),
     checksum: new Bun.CryptoHasher("sha256").update(body).digest("hex"),
   });
-  await writeFile(ledgerPath(ws), JSON.stringify(records, null, 2) + "\n");
+  await writeJsonAtomic(ledgerPath(ws), records);
+
+  // Kept as a mirror for anyone inspecting the directory by hand; readers go
+  // through readCurrentApplication instead.
+  await writeFileAtomic(ws.applicationPath, body);
 
   metadata.appVersion = version;
   await writeMetadata(ws, metadata);

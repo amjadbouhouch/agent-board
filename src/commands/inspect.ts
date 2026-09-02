@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
 import { open } from "../lib/db.ts";
 import { loadConfig, workspacesRoot, CliError } from "../lib/config.ts";
 import { openWorkspace, readMetadata, listSnapshots } from "../lib/workspace.ts";
 import { appliedMigrations, listBusinessTables, readMigrationFiles } from "../lib/migrations.ts";
-import { listApplicationVersionRecords } from "../lib/application.ts";
+import { listApplicationVersionRecords, readCurrentApplication } from "../lib/application.ts";
 
 export async function cmdInspect(args: string[]): Promise<number> {
   const [id] = args;
@@ -39,7 +38,7 @@ export async function cmdInspect(args: string[]): Promise<number> {
     db.close();
   }
 
-  const app = JSON.parse(await readFile(ws.applicationPath, "utf8"));
+  const app = (await readCurrentApplication(ws)) as Record<string, unknown>;
   const pages = Array.isArray(app.pages) ? app.pages.length : 0;
   const queries = Array.isArray(app.savedQueries) ? app.savedQueries.length : 0;
   console.log(`\nApplication: “${app.title}” — ${pages} page(s), ${queries} saved quer${queries === 1 ? "y" : "ies"}`);

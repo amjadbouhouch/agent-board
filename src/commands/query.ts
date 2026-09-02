@@ -1,10 +1,15 @@
-import { readFile } from "node:fs/promises";
 import { loadConfig, workspacesRoot, CliError } from "../lib/config.ts";
 import { openWorkspace, type Workspace } from "../lib/workspace.ts";
-import { DEFAULT_ROW_LIMIT, formatTable, runQuery, savedQueriesOf } from "../lib/queries.ts";
+import { readCurrentApplication } from "../lib/application.ts";
+import {
+  DEFAULT_ROW_LIMIT,
+  formatTable,
+  runQuery,
+  savedQueriesOf,
+} from "../lib/queries.ts";
 
 async function resolveSavedQuery(ws: Workspace, name: string): Promise<string> {
-  const spec = JSON.parse(await readFile(ws.applicationPath, "utf8"));
+  const spec = await readCurrentApplication(ws);
   const queries = savedQueriesOf(spec);
   const query = queries.find((q) => q.name === name);
   if (!query) {
