@@ -81,6 +81,13 @@ export function smokeTestSavedQueries(ws: Workspace, spec: unknown): string[] {
 /** Default cap on returned rows. */
 export const DEFAULT_ROW_LIMIT = 100;
 
+/**
+ * Hard ceiling on returned rows. Entry points validate and report a clear error
+ * before reaching this, but the clamp lives here so no caller — present or
+ * future — can raise the cap by passing a larger or wrongly typed value.
+ */
+export const MAX_ROW_LIMIT = 10_000;
+
 export interface QueryResult {
   columns: string[];
   rows: Record<string, unknown>[];
@@ -103,7 +110,13 @@ export function runQuery(ws: Workspace, sql: string, options: QueryOptions = {})
   const violation = readOnlyViolation(sql);
   if (violation) throw new CliError(`Query ${violation}.`);
 
-  const limit = options.limit ?? DEFAULT_ROW_LIMIT;
+  // A non-integer limit used to make the `rows.length >= limit` guard always
+  // false, disabling the cap entirely, so anything unusable falls back.
+  const requested = options.limit;
+  const limit =
+    typeof requested === "number" && Number.isInteger(requested) && requested > 0
+      ? Math.min(requested, MAX_ROW_LIMIT)
+      : DEFAULT_ROW_LIMIT;
   const db = open(ws.dbPath, { readOnly: true });
   try {
     const statement = db.query(sql);

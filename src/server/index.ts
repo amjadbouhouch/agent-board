@@ -1,10 +1,9 @@
-import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { readMetadata, workspacePaths, type Workspace } from "../lib/workspace.ts";
-import { listApplicationVersionRecords } from "../lib/application.ts";
-import { savedQueriesOf } from "../lib/queries.ts";
+import { listApplicationVersionRecords, readCurrentApplication } from "../lib/application.ts";
+import { MAX_ROW_LIMIT, savedQueriesOf } from "../lib/queries.ts";
 import { DEFAULT_QUERY_TIMEOUT_MS, executeWithDeadline } from "./execute.ts";
-import { HttpError, badRequest, forbidden, notFound } from "./errors.ts";
+import { HttpError, badRequest, forbidden, notFound, payloadTooLarge } from "./errors.ts";
 
 /** Actions the runtime asks the host to authorize. */
 export type Action = "application:read" | "query:run";
@@ -108,10 +107,7 @@ async function route(options: AgentBoardOptions, request: Request): Promise<Resp
 
     if (resource === "application" && request.method === "GET") {
       if (segments.length === 3) {
-        const body = await readFile(ws.applicationPath, "utf8");
-        return new Response(body, {
-          headers: { "content-type": "application/json; charset=utf-8" },
-        });
+        return Response.json(await readCurrentApplication(ws));
       }
       if (child === "versions" && segments.length === 4) {
         const [metadata, versions] = await Promise.all([
@@ -131,23 +127,104 @@ async function route(options: AgentBoardOptions, request: Request): Promise<Resp
 }
 
 interface QueryRequestBody {
-  parameters?: Record<string, string | null>;
+  parameters: Record<string, string | null>;
   limit?: number;
 }
 
-async function readJsonBody(request: Request): Promise<QueryRequestBody> {
-  const text = await request.text();
-  if (text.trim().length === 0) return {};
-  try {
-    const body = JSON.parse(text);
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-      throw badRequest("invalid_body", "Request body must be a JSON object.");
+/**
+ * A query request carries only parameters and a limit, so anything approaching
+ * this size is a mistake or an attack. Both are rejected before the body is
+ * held in memory.
+ */
+const MAX_BODY_BYTES = 64 * 1024;
+
+/**
+ * Reads the body while counting bytes. `Content-Length` is checked first as a
+ * cheap rejection, but it is caller-supplied and absent on chunked requests, so
+ * the running total is what actually enforces the cap.
+ */
+async function readBodyText(request: Request): Promise<string> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    throw payloadTooLarge(`Request body exceeds ${MAX_BODY_BYTES} bytes.`);
+  }
+  if (!request.body) return "";
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      await reader.cancel();
+      throw payloadTooLarge(`Request body exceeds ${MAX_BODY_BYTES} bytes.`);
     }
-    return body as QueryRequestBody;
-  } catch (error) {
-    if (error instanceof HttpError) throw error;
+    chunks.push(value);
+  }
+
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(joined);
+}
+
+/** Values SQLite can bind. Anything else is the caller's mistake, not a 500. */
+function validateParameters(value: unknown): Record<string, string | null> {
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw badRequest("invalid_parameters", "parameters must be a JSON object.");
+  }
+  const parameters: Record<string, string | null> = {};
+  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (raw === null || typeof raw === "string") {
+      parameters[name] = raw;
+    } else if (typeof raw === "number" || typeof raw === "boolean") {
+      parameters[name] = String(raw);
+    } else {
+      throw badRequest(
+        "invalid_parameters",
+        `Parameter "${name}" must be a string, number, boolean or null.`,
+      );
+    }
+  }
+  return parameters;
+}
+
+function validateLimit(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    throw badRequest("invalid_limit", `limit must be an integer from 1 to ${MAX_ROW_LIMIT}.`);
+  }
+  if (value > MAX_ROW_LIMIT) {
+    throw badRequest("invalid_limit", `limit may not exceed ${MAX_ROW_LIMIT}, got ${value}.`);
+  }
+  return value;
+}
+
+async function readJsonBody(request: Request): Promise<QueryRequestBody> {
+  const text = await readBodyText(request);
+  if (text.trim().length === 0) return { parameters: {} };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
     throw badRequest("invalid_body", "Request body is not valid JSON.");
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw badRequest("invalid_body", "Request body must be a JSON object.");
+  }
+
+  const body = parsed as Record<string, unknown>;
+  return {
+    parameters: validateParameters(body.parameters),
+    limit: validateLimit(body.limit),
+  };
 }
 
 /**
@@ -162,7 +239,7 @@ async function runSavedQuery(
   request: Request,
 ): Promise<Response> {
   const body = await readJsonBody(request);
-  const spec = JSON.parse(await readFile(ws.applicationPath, "utf8"));
+  const spec = await readCurrentApplication(ws);
   const query = savedQueriesOf(spec).find((candidate) => candidate.name === name);
   if (!query) {
     throw notFound("query_not_found", `Saved query "${name}" is not published.`);
@@ -171,7 +248,7 @@ async function runSavedQuery(
   const result = await executeWithDeadline(
     ws,
     query.sql,
-    { parameters: body.parameters ?? {}, limit: body.limit },
+    { parameters: body.parameters, limit: body.limit },
     options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS,
   );
   return Response.json({

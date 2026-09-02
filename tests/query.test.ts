@@ -179,3 +179,10 @@ test("query --json emits a machine-readable result", async () => {
     limit: 2,
   });
 });
+
+test("query refuses a --limit above the maximum instead of silently capping it", async () => {
+  const result = await runCli(project.dir, ["query", ws, "SELECT name FROM users", "--limit", "999999"]);
+
+  expect(result.stderr).toContain("10000");
+  expect(result.code).toBe(1);
+});

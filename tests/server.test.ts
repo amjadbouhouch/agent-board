@@ -257,3 +257,89 @@ test("a workspace id cannot escape the workspaces directory", async () => {
   expect((await encoded.json()) as any).toMatchObject({ error: "invalid_workspace_id" });
   expect(nested.status).toBe(400);
 });
+
+/**
+ * The row limit and the request body are both caller-controlled, so both are
+ * bounded. A string limit used to pass straight through to a `>=` comparison
+ * that is always false, which disabled the cap and returned the whole table.
+ */
+const BAD_LIMITS: [string, unknown][] = [
+  ["a string", "abc"],
+  ["negative", -5],
+  ["zero", 0],
+  ["fractional", 1.5],
+  ["null", null],
+  ["an object", { n: 1 }],
+];
+
+for (const [label, limit] of BAD_LIMITS) {
+  test(`POST queries rejects ${label} as a limit`, async () => {
+    await publish([{ name: "stores", sql: "SELECT name FROM users ORDER BY name" }]);
+    server = await startServer(project);
+
+    const response = await fetch(`${server.url}/workspaces/${ws}/queries/stores`, {
+      method: "POST",
+      body: JSON.stringify({ limit }),
+    });
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as any).toMatchObject({ error: "invalid_limit" });
+  });
+}
+
+test("POST queries refuses a limit above the maximum instead of honouring it", async () => {
+  await publish([{ name: "stores", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const response = await fetch(`${server.url}/workspaces/${ws}/queries/stores`, {
+    method: "POST",
+    body: JSON.stringify({ limit: 5_000_000 }),
+  });
+
+  expect(response.status).toBe(400);
+  const body = (await response.json()) as any;
+  expect(body.error).toBe("invalid_limit");
+  expect(body.message).toMatch(/\d/); // states the maximum
+});
+
+test("POST queries rejects an oversized request body", async () => {
+  await publish([{ name: "stores", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const response = await fetch(`${server.url}/workspaces/${ws}/queries/stores`, {
+    method: "POST",
+    body: JSON.stringify({ limit: 1, pad: "A".repeat(2_000_000) }),
+  });
+
+  expect(response.status).toBe(413);
+  expect((await response.json()) as any).toMatchObject({ error: "body_too_large" });
+});
+
+test("POST queries rejects a parameter value that is not a scalar", async () => {
+  await publish([
+    { name: "by_plan", sql: "SELECT name FROM users WHERE plan = $plan" },
+  ]);
+  server = await startServer(project);
+
+  const response = await fetch(`${server.url}/workspaces/${ws}/queries/by_plan`, {
+    method: "POST",
+    body: JSON.stringify({ parameters: { plan: { nested: true } } }),
+  });
+
+  // Previously a 500 leaking the driver's "Binding expected string, ..." text.
+  expect(response.status).toBe(400);
+  expect((await response.json()) as any).toMatchObject({ error: "invalid_parameters" });
+});
+
+test("POST queries rejects parameters that are not an object", async () => {
+  await publish([{ name: "stores", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const response = await fetch(`${server.url}/workspaces/${ws}/queries/stores`, {
+    method: "POST",
+    body: JSON.stringify({ parameters: ["a", "b"] }),
+  });
+
+  expect(response.status).toBe(400);
+  expect((await response.json()) as any).toMatchObject({ error: "invalid_parameters" });
+});

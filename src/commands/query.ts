@@ -3,6 +3,7 @@ import { openWorkspace, type Workspace } from "../lib/workspace.ts";
 import { readCurrentApplication } from "../lib/application.ts";
 import {
   DEFAULT_ROW_LIMIT,
+  MAX_ROW_LIMIT,
   formatTable,
   runQuery,
   savedQueriesOf,
@@ -36,6 +37,10 @@ export async function cmdQuery(args: string[]): Promise<number> {
       limit = Number(raw);
       if (!Number.isInteger(limit) || limit < 1) {
         throw new CliError(`--limit must be a positive integer, got "${raw}".`);
+      }
+      // Erroring rather than clamping: a silently capped result looks complete.
+      if (limit > MAX_ROW_LIMIT) {
+        throw new CliError(`--limit may not exceed ${MAX_ROW_LIMIT}, got ${limit}.`);
       }
     } else if (arg === "--param") {
       const raw = args[++i];
