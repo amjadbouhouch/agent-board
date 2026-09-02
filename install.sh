@@ -12,9 +12,11 @@
 #   AGENT_BOARD_BASE_URL     download from a mirror instead of GitHub releases
 #
 # Flags:
-#   --local      build from the current source tree instead of downloading
-#   --uninstall  remove an existing installation
-#   --version X  install a specific version
+#   --local            build from the current source tree instead of downloading
+#   --uninstall        remove an existing installation
+#   --version X        install a specific version
+#   --modify-path      add the install dir to your shell profile without asking
+#   --no-modify-path   never touch a shell profile
 #
 # POSIX sh on purpose: this has to run under `| sh` on any machine.
 set -eu
@@ -24,6 +26,8 @@ INSTALL_DIR="${AGENT_BOARD_INSTALL_DIR:-$HOME/.agent-board/bin}"
 VERSION="${AGENT_BOARD_VERSION:-latest}"
 BIN_NAME="agent-board"
 MODE="download"
+# unset = ask when a terminal is available; yes/no = decided by flag or env.
+MODIFY_PATH="${AGENT_BOARD_MODIFY_PATH:-}"
 
 # Colour only when stdout is a terminal, so piped output stays clean.
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -42,6 +46,8 @@ ok()   { printf '%s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --local)     MODE="local" ;;
+    --modify-path)    [ "$MODIFY_PATH" = "no" ] || MODIFY_PATH="yes" ;;
+    --no-modify-path) MODIFY_PATH="no" ;;
     --uninstall) MODE="uninstall" ;;
     --version)   shift; [ $# -gt 0 ] || err "--version needs a value"; VERSION="$1" ;;
     --version=*) VERSION="${1#--version=}" ;;
@@ -190,6 +196,46 @@ if [ -n "$SHADOW" ] && [ "$SHADOW" != "$TARGET_PATH" ]; then
   info "  ${DIM}rm $SHADOW${RESET}"
 fi
 
+# ------------------------------------------------------------- shell profile
+# The file this shell actually reads at startup.
+shell_profile() {
+  case "$(basename "${SHELL:-sh}")" in
+    fish) printf '%s/.config/fish/config.fish' "$HOME" ;;
+    zsh)  printf '%s/.zshrc' "${ZDOTDIR:-$HOME}" ;;
+    bash) if [ -f "$HOME/.bashrc" ]; then printf '%s/.bashrc' "$HOME"
+          else printf '%s/.bash_profile' "$HOME"; fi ;;
+    *)    printf '%s/.profile' "$HOME" ;;
+  esac
+}
+
+# Written with $HOME rather than the expanded path so the line survives being
+# copied to another machine.
+path_line() {
+  dir_expr=$1
+  case "${dir_expr}" in "$HOME"/*) dir_expr="\$HOME${dir_expr#"$HOME"}" ;; esac
+  case "$(basename "${SHELL:-sh}")" in
+    fish) printf 'fish_add_path "%s"' "$dir_expr" ;;
+    *)    printf 'export PATH="%s:$PATH"' "$dir_expr" ;;
+  esac
+}
+
+# Appends the line unless it is already there, so re-running is a no-op.
+add_to_profile() {
+  profile=$(shell_profile)
+  line=$(path_line "$INSTALL_DIR")
+
+  if [ -f "$profile" ] && grep -Fqx "$line" "$profile"; then
+    info "$profile already sets the PATH."
+    return 0
+  fi
+
+  mkdir -p "${profile%/*}"
+  printf '\n# AgentBoard\n%s\n' "$line" >> "$profile"
+  ok "added $INSTALL_DIR to $profile"
+  say ""
+  info "Start a new shell, or run: ${DIM}. $profile${RESET}"
+}
+
 # ---------------------------------------------------------------------- PATH
 case ":${PATH}:" in
   *":$INSTALL_DIR:"*) ON_PATH=1 ;;
@@ -199,26 +245,34 @@ esac
 if [ "$ON_PATH" -eq 1 ]; then
   say ""
   info "Run ${BOLD}agent-board help${RESET} to get started."
+elif [ "$MODIFY_PATH" = "no" ]; then
+  say ""
+  info "Add $INSTALL_DIR to your PATH with:"
+  info "  ${DIM}$(path_line "$INSTALL_DIR")${RESET}"
+elif [ "$MODIFY_PATH" = "yes" ]; then
+  say ""
+  add_to_profile
 else
-  case "${SHELL:-}" in
-    */zsh)  PROFILE="$HOME/.zshrc" ;;
-    */bash) if [ -f "$HOME/.bashrc" ]; then PROFILE="$HOME/.bashrc"; else PROFILE="$HOME/.bash_profile"; fi ;;
-    */fish) PROFILE="$HOME/.config/fish/config.fish" ;;
-    *)      PROFILE="your shell profile" ;;
-  esac
   say ""
   warn "$INSTALL_DIR is not on your PATH."
   say ""
-  if [ "${PROFILE}" = "your shell profile" ]; then
-    info "Add this to your shell profile:"
-    info "  export PATH=\"$INSTALL_DIR:\$PATH\""
-  elif [ "${SHELL##*/}" = "fish" ]; then
-    info "Add it with:"
-    info "  ${DIM}fish_add_path $INSTALL_DIR${RESET}"
+  # Under `curl | sh` stdin is the script itself, so the prompt has to come
+  # from the terminal directly. No terminal (CI, pipelines) means no prompt and
+  # no edit — just the instruction.
+  if [ -e /dev/tty ] && ( : <>/dev/tty ) 2>/dev/null; then
+    exec 3<>/dev/tty
+    printf '  Add it to %s now? [Y/n] ' "$(shell_profile)" >&3
+    IFS= read -r reply <&3 || reply=""
+    exec 3>&-
+    case "$reply" in
+      n|N|no|NO) info "Add it yourself with:"
+                 info "  ${DIM}$(path_line "$INSTALL_DIR")${RESET}" ;;
+      *)         add_to_profile ;;
+    esac
   else
     info "Add it with:"
-    info "  ${DIM}echo 'export PATH=\"$INSTALL_DIR:\$PATH\"' >> $PROFILE${RESET}"
-    info "  ${DIM}source $PROFILE${RESET}"
+    info "  ${DIM}$(path_line "$INSTALL_DIR")${RESET}"
+    info "  ${DIM}(or re-run with --modify-path)${RESET}"
   fi
 fi
 say ""

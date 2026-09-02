@@ -80,7 +80,13 @@ triggers `release.yml` to build the four binaries.
 on, so a tag whose tests fail publishes nothing. `ci.yml` covers pull requests and
 manual runs only — it deliberately does not duplicate that check on every push.
 
-Distribution is GitHub Releases plus `install.sh`; there is no npm package. The
+Distribution is GitHub Releases plus `install.sh`; there is no npm package.
+
+`install.sh` offers to add its install dir to the shell profile. Under `curl | sh`
+stdin is the script, so the prompt reads from `/dev/tty` directly; with no terminal
+(CI) it prints the line instead of editing anything. `--modify-path` /
+`--no-modify-path` make it scriptable, and the appended line uses `$HOME` so it stays
+valid if copied to another machine. The
 manifest is `"private": true`, so the `npm publish` hint the release tool prints does
 not apply and `npm publish` will refuse. `tests/release-assets.test.ts` runs
 `install.sh` against a stubbed `uname` for all four platforms and asserts every name it
