@@ -136,6 +136,11 @@ export function runQuery(ws: Workspace, sql: string, options: QueryOptions = {})
     }
     statement.finalize();
     return { columns, rows, truncated, limit };
+  } catch (error) {
+    // A missing table or a syntax error arrives as a driver exception, which
+    // would otherwise reach the user as a stack trace through bun:sqlite.
+    if (error instanceof CliError) throw error;
+    throw new CliError(`Query failed: ${(error as Error).message}`);
   } finally {
     db.close();
   }
