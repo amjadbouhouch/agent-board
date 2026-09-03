@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.3.0](https://github.com/amjadbouhouch/agent-board/compare/v0.2.1...v0.3.0) (2026-09-03)
+
+### ⚠ BREAKING CHANGES
+
+* **dsl:** a `filter` component must now declare `targets`. A filter that
+  drives nothing renders a control the user can change to no effect, which is the
+  class of failure this validator exists to make impossible.
+
+### Features
+
+* **dsl:** filter results, bind filter controls, serve a UI, and upsert rows ([9f580f7](https://github.com/amjadbouhouch/agent-board/commit/9f580f74d09bf87d2a73e3b2e6996120c2dc26b8))
 ## [0.2.1](https://github.com/amjadbouhouch/agent-board/compare/v0.2.0...v0.2.1) (2026-09-03)
 
 ### Features
