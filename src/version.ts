@@ -4,4 +4,4 @@
  * constant; `tests/version.test.ts` asserts it matches package.json so the two
  * cannot drift.
  */
-export const VERSION = "0.2.0";
+export const VERSION = "0.2.1";
