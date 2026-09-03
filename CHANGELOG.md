@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.3.1](https://github.com/amjadbouhouch/agent-board/compare/v0.3.0...v0.3.1) (2026-09-03)
+
+### Bug Fixes
+
+* **cli:** list upsert and --on-conflict in help ([11b27d0](https://github.com/amjadbouhouch/agent-board/commit/11b27d05edd4b2931d08eee000e873337e2a4f0b))
 ## [0.3.0](https://github.com/amjadbouhouch/agent-board/compare/v0.2.1...v0.3.0) (2026-09-03)
 
 ### ⚠ BREAKING CHANGES
