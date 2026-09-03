@@ -23,18 +23,28 @@ Bun only — `bun:sqlite` means this cannot run on Node at any version.
 
 `src/cli.ts` dispatches to one file per command in `src/commands/`. Business logic
 lives in `src/lib/`, and `src/server/` reuses that same `lib/` rather than
-reimplementing anything. There are four chokepoints, and the design depends on
+reimplementing anything. There are five chokepoints, and the design depends on
 edits going *through* them rather than around:
 
 - **`lib/application.ts` › `publishSpec()` is the only way an application version is
   written.** The four publish gates live inside it, not in the command, so `publish`
   and `rollback` both inherit them. A new write path that skips it silently drops the
   gates.
-- **`lib/queries.ts` › `runQuery()` is the only way SQL executes.** Read-only
+- **`lib/queries.ts` › `runQuery()` is the only way agent-authored SQL runs.** Read-only
   enforcement and parameter validation live inside it, so its three callers — the CLI
   `query` command, the publish smoke test, and the child process the server spawns —
   cannot diverge on safety.
-- **`lib/db.ts` is the only file that imports the SQLite driver.** Six modules go
+- **`lib/mutations.ts` is the only way rows are written.** Migrations own schema and
+  the backfill that belongs with a schema change; ongoing and bulk data go here. The
+  caller names a table, columns and structured filters and the module composes the
+  statement, so no write SQL is ever supplied from outside — that is what makes scope
+  and injection structural rather than validated. The gates (protected namespace,
+  column and numeric-affinity checks, `--where` required, the preview receipt, the
+  affected-row cap, the `_audit_row_changes` entry with its before-image) live here so
+  a later HTTP route reuses rather than reimplements them. It would still need to map
+  the `CliError`s they throw onto `HttpError`, or they arrive as opaque 500s. Do not
+  relax `runQuery`'s read-only check to write; that separation is the point.
+- **`lib/db.ts` is the only file that imports the SQLite driver.** Seven modules go
   through it. Keeping that true is what makes a `node:sqlite` swap a one-file change.
 - **`server/index.ts` › `createAgentBoard()` is the whole HTTP surface**, returning a
   `fetch` handler. `agent-board start` is a thin wrapper that adds no routes and
