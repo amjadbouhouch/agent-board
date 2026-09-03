@@ -1,8 +1,11 @@
-import { open } from "./db.ts";
+import { open, quoteIdent } from "./db.ts";
 import { CliError } from "./config.ts";
 
 /** A caller-supplied parameter problem, as opposed to a broken query. */
 export class ParameterError extends CliError {}
+
+/** A caller-supplied ordering problem: naming a column the result does not have. */
+export class SortError extends CliError {}
 import type { Workspace } from "./workspace.ts";
 
 export interface SavedQuery {
@@ -98,7 +101,54 @@ export interface QueryResult {
 
 export interface QueryOptions {
   limit?: number;
+  /** Rows to skip. Meaningful only alongside `sort`; see `shapeQuery`. */
+  offset?: number;
+  /** Result columns to order by, `-name` for descending. */
+  sort?: string[];
   parameters?: Record<string, string | null>;
+}
+
+/**
+ * Builds the ORDER BY terms, checking every name against the columns the query
+ * actually returns.
+ *
+ * The check is not defensive: SQLite resolves an unmatched double-quoted
+ * identifier to a string literal, so `ORDER BY "nope"` sorts every row by a
+ * constant and silently returns them unordered.
+ */
+function orderByClause(sort: string[], columns: string[]): string {
+  return sort
+    .map((raw) => {
+      const descending = raw.startsWith("-");
+      const name = descending ? raw.slice(1) : raw;
+      if (!columns.includes(name)) {
+        throw new SortError(
+          `Cannot sort by "${name}" — the query returns: ${columns.join(", ")}.`,
+        );
+      }
+      return `${quoteIdent(name)} ${descending ? "DESC" : "ASC"}`;
+    })
+    .join(", ");
+}
+
+/**
+ * Wraps the statement so ordering and paging apply to its result rather than
+ * being spliced into SQL nobody here wrote.
+ *
+ * `LIMIT -1` means unlimited: the row cap stays in the streaming loop below, so
+ * `truncated` keeps reporting whether a further row exists. The offset is an
+ * integer that has already been validated, which is why it can be inlined —
+ * a placeholder would look like a declared parameter and be demanded from the
+ * caller.
+ */
+function shapeQuery(sql: string, columns: string[], sort: string[], offset: number): string | null {
+  const order = sort.length > 0 ? orderByClause(sort, columns) : "";
+  if (!order && offset === 0) return null;
+  return (
+    `SELECT * FROM (${sql})` +
+    (order ? ` ORDER BY ${order}` : "") +
+    (offset > 0 ? ` LIMIT -1 OFFSET ${offset}` : "")
+  );
 }
 
 /**
@@ -117,11 +167,26 @@ export function runQuery(ws: Workspace, sql: string, options: QueryOptions = {})
     typeof requested === "number" && Number.isInteger(requested) && requested > 0
       ? Math.min(requested, MAX_ROW_LIMIT)
       : DEFAULT_ROW_LIMIT;
+  const requestedOffset = options.offset;
+  const offset =
+    typeof requestedOffset === "number" &&
+    Number.isInteger(requestedOffset) &&
+    requestedOffset >= 0
+      ? requestedOffset
+      : 0;
+
   const db = open(ws.dbPath, { readOnly: true });
   try {
-    const statement = db.query(sql);
+    let statement = db.query(sql);
     const columns = statement.columnNames;
     const bindings = bindParameters(sql, options.parameters ?? {});
+
+    // Placeholders survive the wrap textually, so the bindings above still apply.
+    const shaped = shapeQuery(sql, columns, options.sort ?? [], offset);
+    if (shaped) {
+      statement.finalize();
+      statement = db.query(shaped);
+    }
 
     // Streamed rather than collected with.all(), so an enormous result set is
     // never fully materialised just to be thrown away.

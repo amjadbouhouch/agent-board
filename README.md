@@ -57,6 +57,29 @@ END;
 
 It cannot loop: `PRAGMA` is refused inside migrations, so `recursive_triggers` stays off.
 
+
+## A component asks for the rows it needs
+
+A component's `source` is `{ type, query, parameters?, limit?, offset?, sort? }`, and
+the same `limit`, `offset` and `sort` are accepted in the query request body, so a
+renderer can page and re-sort without republishing.
+
+- Set `limit` when the component needs more than the default 100 rows; the runtime
+  returns up to 10,000, but only if asked. A table that omits it renders its first page
+  and says nothing about the rest — which is how a 460-row catalogue quietly becomes a
+  100-row one.
+- `sort` is an array of result columns, `-name` for descending.
+- **`offset` is only meaningful with `sort`.** SQL has no inherent row order, so paging
+  an unordered query repeats rows on one page and skips them on the next, with nothing
+  to signal it.
+- `truncated` in the response is the "there is a next page" flag, and it is exact: a
+  page that ends on the last row reports `false` rather than guessing from a full page.
+- Ordering and paging are applied by wrapping the saved query as a subquery, never by
+  splicing text into it, and every column name is checked against the columns the query
+  actually returns. That check is not defensive: SQLite resolves an unmatched
+  double-quoted identifier to a *string literal*, so `ORDER BY "nope"` sorts every row
+  by a constant and silently returns them unordered.
+
 ## Publish refuses on purpose
 
 - Four gates run before anything is written: DSL validation, `--expect-version`

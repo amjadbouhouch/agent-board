@@ -138,3 +138,69 @@ test("the fully specified components every renderer needs still validate", async
   expect(result.stderr).toBe("");
   expect(result.code).toBe(0);
 });
+
+/**
+ * A table over more rows than the default cap used to have no way to say so:
+ * the runtime could return them, but the specification could not ask, so a
+ * 460-row catalogue silently rendered its first 100.
+ */
+test("a source may declare the row limit its component needs", async () => {
+  const result = await validateWith([
+    { id: "t", type: "data_table", title: "T", source: { ...SOURCE, limit: 500 } },
+  ]);
+
+  expect(result.stderr).toBe("");
+  expect(result.code).toBe(0);
+});
+
+test("a source limit beyond the runtime ceiling is rejected", async () => {
+  const result = await validateWith([
+    { id: "t", type: "data_table", title: "T", source: { ...SOURCE, limit: 50_000 } },
+  ]);
+
+  expect(result.stderr).toContain("source.limit");
+  expect(result.stderr).toContain("10000");
+  expect(result.code).toBe(1);
+});
+
+test("a source limit that is not a whole count is rejected", async () => {
+  for (const limit of [0, -5, 1.5, "500"]) {
+    const result = await validateWith([
+      { id: "t", type: "data_table", title: "T", source: { ...SOURCE, limit } },
+    ]);
+    expect(result.stderr).toContain("source.limit");
+    expect(result.code).toBe(1);
+  }
+});
+
+test("a source may declare ordering and an offset", async () => {
+  const result = await validateWith([
+    {
+      id: "t", type: "data_table", title: "T",
+      source: { ...SOURCE, limit: 100, offset: 200, sort: ["-a", "a"] },
+    },
+  ]);
+
+  expect(result.stderr).toBe("");
+  expect(result.code).toBe(0);
+});
+
+test("a sort that is not a list of column names is rejected", async () => {
+  for (const sort of ["a", [], [""], ["-"], [1], ["a", 2]]) {
+    const result = await validateWith([
+      { id: "t", type: "data_table", title: "T", source: { ...SOURCE, sort } },
+    ]);
+    expect(result.stderr).toContain("source.sort");
+    expect(result.code).toBe(1);
+  }
+});
+
+test("a negative or fractional offset is rejected", async () => {
+  for (const offset of [-1, 1.5, "10"]) {
+    const result = await validateWith([
+      { id: "t", type: "data_table", title: "T", source: { ...SOURCE, offset } },
+    ]);
+    expect(result.stderr).toContain("source.offset");
+    expect(result.code).toBe(1);
+  }
+});

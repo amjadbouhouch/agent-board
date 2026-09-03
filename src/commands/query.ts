@@ -24,6 +24,8 @@ export async function cmdQuery(args: string[]): Promise<number> {
   const positional: string[] = [];
   let saved: string | undefined;
   let limit = DEFAULT_ROW_LIMIT;
+  let offset = 0;
+  const sort: string[] = [];
   const parameters: Record<string, string> = {};
   let asJson = false;
   for (let i = 0; i < args.length; i++) {
@@ -42,6 +44,16 @@ export async function cmdQuery(args: string[]): Promise<number> {
       if (limit > MAX_ROW_LIMIT) {
         throw new CliError(`--limit may not exceed ${MAX_ROW_LIMIT}, got ${limit}.`);
       }
+    } else if (arg === "--offset") {
+      const raw = args[++i];
+      offset = Number(raw);
+      if (!Number.isInteger(offset) || offset < 0) {
+        throw new CliError(`--offset must be a whole count of rows to skip, got "${raw}".`);
+      }
+    } else if (arg === "--sort") {
+      const raw = args[++i];
+      if (raw === undefined) throw new CliError("--sort requires a column name.");
+      sort.push(raw);
     } else if (arg === "--param") {
       const raw = args[++i];
       if (raw === undefined) throw new CliError("--param requires name=value.");
@@ -72,7 +84,7 @@ export async function cmdQuery(args: string[]): Promise<number> {
   const ws = openWorkspace(workspacesRoot(config), id);
   const sql = saved ? await resolveSavedQuery(ws, saved) : inlineSql!;
 
-  const result = runQuery(ws, sql, { limit, parameters });
+  const result = runQuery(ws, sql, { limit, offset, sort, parameters });
 
   if (asJson) {
     console.log(

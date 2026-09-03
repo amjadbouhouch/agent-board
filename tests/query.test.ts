@@ -186,3 +186,93 @@ test("query refuses a --limit above the maximum instead of silently capping it",
   expect(result.stderr).toContain("10000");
   expect(result.code).toBe(1);
 });
+
+/**
+ * Ordering and paging.
+ *
+ * `sort` and `offset` ship together on purpose: SQL has no inherent row order,
+ * so paging an unordered query repeats rows on one page and skips them on the
+ * next, with nothing to signal it.
+ */
+const ORDERED = `SELECT id, name, plan FROM users`;
+
+test("--sort orders by a column of the result", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, ORDERED, "--sort", "name", "--json",
+  ]);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name))
+   .toEqual(["Alice", "Bob", "Carol"]);
+});
+
+test("a leading minus sorts descending", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, ORDERED, "--sort", "-name", "--json",
+  ]);
+  expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name))
+   .toEqual(["Carol", "Bob", "Alice"]);
+});
+
+test("sorts by several columns in the order given", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, ORDERED, "--sort", "plan", "--sort", "-name", "--json",
+  ]);
+  expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name))
+   .toEqual(["Bob", "Carol", "Alice"]);
+});
+
+test("a sort column that is not in the result is refused, not ignored", async () => {
+  // SQLite resolves an unmatched double-quoted identifier to a string literal,
+  // so `ORDER BY "nope"` sorts every row by a constant and silently does
+  // nothing. The column has to be checked before it reaches SQLite.
+  const result = await runCli(project.dir, [
+    "query", ws, ORDERED, "--sort", "nope",
+  ]);
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("nope");
+  expect(result.stderr).toContain("id, name, plan");
+});
+
+test("--offset skips rows and pages without repeating or dropping any", async () => {
+  const page = async (offset: number) => {
+    const result = await runCli(project.dir, [
+      "query", ws, ORDERED, "--sort", "name", "--limit", "2", "--offset", String(offset), "--json",
+    ]);
+    if (result.code !== 0) throw new Error(result.stderr);
+    return JSON.parse(result.stdout);
+  };
+
+  const first = await page(0);
+  expect(first.rows.map((r: { name: string }) => r.name)).toEqual(["Alice", "Bob"]);
+  expect(first.truncated).toBe(true); // there is a next page
+
+  const second = await page(2);
+  expect(second.rows.map((r: { name: string }) => r.name)).toEqual(["Carol"]);
+  expect(second.truncated).toBe(false); // and no page after that
+});
+
+test("--offset past the end returns nothing rather than failing", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, ORDERED, "--sort", "name", "--offset", "99", "--json",
+  ]);
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout).rowCount).toBe(0);
+});
+
+test("--offset must be a whole count", async () => {
+  for (const offset of ["-1", "1.5", "abc"]) {
+    const result = await runCli(project.dir, ["query", ws, ORDERED, "--offset", offset]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--offset");
+  }
+});
+
+test("sorting a parameterised query keeps its parameters working", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, "SELECT id, name FROM users WHERE plan = :plan",
+    "--param", "plan=pro", "--sort", "-name", "--json",
+  ]);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name))
+   .toEqual(["Carol", "Alice"]);
+});

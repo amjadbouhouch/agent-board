@@ -343,3 +343,70 @@ test("POST queries rejects parameters that are not an object", async () => {
   expect(response.status).toBe(400);
   expect((await response.json()) as any).toMatchObject({ error: "invalid_parameters" });
 });
+
+/**
+ * Ordering and paging over HTTP. A renderer needs these per request — a table
+ * cannot republish the specification because someone clicked a column header.
+ */
+async function post(name: string, body: unknown): Promise<Response> {
+  return fetch(`${server.url}/workspaces/${ws}/queries/${name}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** Posts and parses, since every assertion below reads named fields. */
+async function postJson(name: string, body: unknown): Promise<any> {
+  return (await post(name, body)).json();
+}
+
+test("POST accepts sort and offset, and pages without repeating a row", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const first = await postJson("users", { sort: ["name"], limit: 2 });
+  expect(first.rows).toEqual([{ name: "Alice" }, { name: "Bob" }]);
+  expect(first.truncated).toBe(true);
+
+  const second = await postJson("users", { sort: ["name"], limit: 2, offset: 2 });
+  expect(second.rows).toEqual([{ name: "Carol" }]);
+  expect(second.truncated).toBe(false);
+});
+
+test("POST sorts descending on a leading minus", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const body = await postJson("users", { sort: ["-name"] });
+  expect(body.rows).toEqual([{ name: "Carol" }, { name: "Bob" }, { name: "Alice" }]);
+});
+
+test("POST rejects a sort column the query does not return", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  // The caller named a column that is not in the result — their mistake, so a
+  // 400 with its own code rather than an opaque 500.
+  const response = await post("users", { sort: ["nope"] });
+  expect(response.status).toBe(400);
+  const body: any = await response.json();
+  expect(body.error).toBe("invalid_sort");
+  expect(body.message).toContain("name");
+});
+
+test("POST rejects a malformed sort or offset", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  for (const body of [{ sort: "name" }, { sort: [] }, { sort: [1] }, { sort: [""] }]) {
+    const response = await post("users", body);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toBe("invalid_sort");
+  }
+  for (const body of [{ offset: -1 }, { offset: 1.5 }, { offset: "2" }]) {
+    const response = await post("users", body);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toBe("invalid_offset");
+  }
+});

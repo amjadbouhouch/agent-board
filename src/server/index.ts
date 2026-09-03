@@ -129,6 +129,8 @@ async function route(options: AgentBoardOptions, request: Request): Promise<Resp
 interface QueryRequestBody {
   parameters: Record<string, string | null>;
   limit?: number;
+  offset?: number;
+  sort?: string[];
 }
 
 /**
@@ -206,6 +208,35 @@ function validateLimit(value: unknown): number | undefined {
   return value;
 }
 
+function validateOffset(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw badRequest("invalid_offset", "offset must be a whole count of rows to skip.");
+  }
+  return value;
+}
+
+/**
+ * Shape only — whether a column exists is decided by the query that runs, so
+ * that check happens there and comes back as `invalid_sort` too.
+ */
+function validateSort(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw badRequest("invalid_sort", "sort must be a non-empty array of column names.");
+  }
+  return value.map((entry) => {
+    const name = typeof entry === "string" && entry.startsWith("-") ? entry.slice(1) : entry;
+    if (typeof name !== "string" || name.length === 0) {
+      throw badRequest(
+        "invalid_sort",
+        'sort entries must name a column, "-column" for descending.',
+      );
+    }
+    return entry as string;
+  });
+}
+
 async function readJsonBody(request: Request): Promise<QueryRequestBody> {
   const text = await readBodyText(request);
   if (text.trim().length === 0) return { parameters: {} };
@@ -224,6 +255,8 @@ async function readJsonBody(request: Request): Promise<QueryRequestBody> {
   return {
     parameters: validateParameters(body.parameters),
     limit: validateLimit(body.limit),
+    offset: validateOffset(body.offset),
+    sort: validateSort(body.sort),
   };
 }
 
@@ -248,7 +281,7 @@ async function runSavedQuery(
   const result = await executeWithDeadline(
     ws,
     query.sql,
-    { parameters: body.parameters, limit: body.limit },
+    { parameters: body.parameters, limit: body.limit, offset: body.offset, sort: body.sort },
     options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS,
   );
   return Response.json({

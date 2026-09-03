@@ -50,3 +50,6 @@ export function checkpoint(path: string): void {
   db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
   db.close();
 }
+
+/** Quotes an SQL identifier. The name must already be known-good. */
+export const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;

@@ -82,5 +82,10 @@ export async function executeWithDeadline(
   if (message.kind === "parameter") {
     throw badRequest("invalid_parameters", String(message.message));
   }
+  // Naming a column the result does not have is the caller's mistake, not a
+  // broken query, so it gets a 400 with its own code rather than an opaque 500.
+  if (message.kind === "sort") {
+    throw badRequest("invalid_sort", String(message.message));
+  }
   throw new HttpError(500, "query_failed", String(message.message ?? "Query failed."));
 }

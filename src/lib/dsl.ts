@@ -10,6 +10,8 @@
  * Returns structured error strings; an empty array means valid.
  */
 
+import { MAX_ROW_LIMIT } from "./queries.ts";
+
 export const SUPPORTED_DSL_VERSIONS = ["1.0"];
 
 export const PAGE_TYPES = ["dashboard"];
@@ -22,6 +24,13 @@ interface ComponentContract {
   optional: string[];
 }
 
+/**
+ * `source` is `{ type, query, parameters?, limit?, offset?, sort? }`. Paging and
+ * ordering belong to the specification because the component knows how many rows
+ * it needs and in what order; without them a table over the default cap draws
+ * its first page and says nothing about the rest, and a renderer has to invent
+ * the numbers in its own code.
+ */
 const COMPONENTS: Record<string, ComponentContract> = {
   metric_card: { source: true, required: ["value"], optional: ["title", "format"] },
   data_table: { source: true, required: [], optional: ["title", "columns", "filter"] },
@@ -257,7 +266,12 @@ function validateSource(
     errors.push(`${label}: data components require a "source" object.`);
     return;
   }
-  rejectUnknownKeys(value, ["type", "query", "parameters"], `${label}.source`, errors);
+  rejectUnknownKeys(
+    value,
+    ["type", "query", "parameters", "limit", "offset", "sort"],
+    `${label}.source`,
+    errors,
+  );
   if (value.type !== "saved_query") {
     errors.push(`${label}: source.type must be "saved_query".`);
     return;
@@ -266,6 +280,41 @@ function validateSource(
     errors.push(`${label}: source.query must be a saved query name.`);
   } else if (savedQueryNames.size > 0 && !savedQueryNames.has(value.query)) {
     errors.push(`${label}: source.query references unknown saved query "${value.query}".`);
+  }
+  if (value.offset !== undefined) {
+    if (typeof value.offset !== "number" || !Number.isInteger(value.offset) || value.offset < 0) {
+      errors.push(
+        `${label}: source.offset must be a whole count of rows to skip, got ${JSON.stringify(value.offset)}.`,
+      );
+    }
+  }
+  if (value.sort !== undefined) {
+    // Paging an unordered query repeats rows on one page and skips them on the
+    // next, so an offset without a sort is a bug waiting to be reported.
+    if (!Array.isArray(value.sort) || value.sort.length === 0) {
+      errors.push(`${label}: source.sort must be a non-empty array of column names.`);
+    } else {
+      for (const entry of value.sort) {
+        const name = typeof entry === "string" && entry.startsWith("-") ? entry.slice(1) : entry;
+        if (typeof name !== "string" || name.length === 0) {
+          errors.push(
+            `${label}: source.sort entries must name a column, "-column" for descending; got ${JSON.stringify(entry)}.`,
+          );
+        }
+      }
+    }
+  }
+  if (value.limit !== undefined) {
+    if (
+      typeof value.limit !== "number" ||
+      !Number.isInteger(value.limit) ||
+      value.limit < 1 ||
+      value.limit > MAX_ROW_LIMIT
+    ) {
+      errors.push(
+        `${label}: source.limit must be an integer from 1 to ${MAX_ROW_LIMIT}, got ${JSON.stringify(value.limit)}.`,
+      );
+    }
   }
 }
 

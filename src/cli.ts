@@ -38,6 +38,8 @@ Query options:
   --saved <name>              Run a saved query from the published specification
   --param <name>=<value>      Bind a declared parameter (repeatable)
   --limit <n>                 Maximum rows to return (default 100)
+  --offset <n>                Rows to skip; pair it with --sort
+  --sort <col>                Order by a result column, -col for descending (repeatable)
   --json                      Emit a machine-readable result
 
 Server options:

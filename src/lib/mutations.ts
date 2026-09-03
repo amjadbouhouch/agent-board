@@ -12,7 +12,7 @@
  * injection structural rather than something a validator has to catch.
  */
 import type { Database } from "./db.ts";
-import { open } from "./db.ts";
+import { open, quoteIdent } from "./db.ts";
 import { CliError } from "./config.ts";
 import { PROTECTED_PREFIXES } from "./migrations.ts";
 import type { Workspace } from "./workspace.ts";
@@ -71,8 +71,6 @@ interface TableInfo {
   name: string;
   columns: Column[];
 }
-
-const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 /**
  * SQLite's type affinity, reduced to what matters here: whether a column is
