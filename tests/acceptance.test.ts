@@ -147,3 +147,35 @@ test("evolve the schema and dashboard, then restore a known working version pair
   expect(stale.stderr).toContain("no such table: plans");
   expect(stale.code).toBe(1);
 });
+
+/**
+ * `help` is what an agent reads to learn the surface, so a command missing from
+ * it does not exist as far as that agent is concerned. `rows upsert` shipped
+ * without being listed and stayed invisible for a release; this asserts every
+ * subcommand and every rows flag the CLI accepts is named there.
+ */
+test("help lists every command and rows flag", async () => {
+  const help = await runCli(project.dir, ["help"]);
+  expect(help.code).toBe(0);
+
+  for (const command of [
+    "init", "start", "workspace create", "workspace list", "inspect", "validate",
+    "migrate", "query", "publish", "rollback", "export", "restore",
+  ]) {
+    expect(help.stdout).toContain(`agent-board ${command}`);
+  }
+
+  for (const sub of ["insert", "upsert", "update", "delete"]) {
+    const usage = await runCli(project.dir, ["rows", sub]);
+    expect(usage.stderr + usage.stdout).toContain(`rows ${sub}`);
+    expect(help.stdout).toContain(sub);
+  }
+
+  for (const flag of [
+    "--data", "--data-file", "--on-conflict", "--returning", "--set", "--where",
+    "--apply", "--force", "--json", "--saved", "--param", "--limit", "--offset",
+    "--sort", "--port", "--host", "--static", "--cors", "--reason", "--expect-version",
+  ]) {
+    expect(help.stdout).toContain(flag);
+  }
+});

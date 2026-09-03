@@ -28,7 +28,7 @@ Usage:
   agent-board validate <application.json>       Validate a specification against the DSL
   agent-board migrate <workspace>               Apply pending migrations (snapshots first)
   agent-board query <workspace> <sql|--saved n> Run a read-only query
-  agent-board rows <insert|update|delete> …     Write rows (see rows options)
+  agent-board rows <insert|upsert|update|delete>  Write rows (see rows options)
   agent-board publish <workspace> <spec.json>   Validate and publish an application specification
   agent-board rollback <workspace> <version>    Republish an earlier application version
   agent-board export <workspace> [out.tar.gz]   Export a workspace as a tarball
@@ -49,9 +49,10 @@ Server options:
   --cors <origin>             Allow browser calls from an origin (repeatable, no "*")
 
 Rows options:
-  --data <json>               Rows to insert, a JSON object or array
-  --data-file <path>          Read the rows to insert from a JSON file
-  --returning                 Return inserted rows, including generated keys
+  --data <json>               Rows to write, a JSON object or array
+  --data-file <path>          Read the rows to write from a JSON file
+  --on-conflict <col>[,<col>] Columns identifying a row, required by upsert
+  --returning                 Return the rows as stored, including generated keys
   --set <col>=<value>         Column to write on update (repeatable)
   --where <col><op><value>    Filter rows; ops != <= >= = < > ~ (~ is contains)
   ...                         Use @null for SQL NULL; bare null is literal text
