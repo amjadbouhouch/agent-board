@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) for commit guidelines.
 
+## [0.2.0](https://github.com/amjadbouhouch/agent-board/compare/v0.1.1...v0.2.0) (2026-09-03)
+
+### Features
+
+* **rows:** manipulate data through the CLI rather than through migrations ([ec0315b](https://github.com/amjadbouhouch/agent-board/commit/ec0315b080af8efce0b1ba4d4657669a7bd71ca3))
+
+### Bug Fixes
+
+* **query:** report a driver failure as a message, not a stack trace ([e262df3](https://github.com/amjadbouhouch/agent-board/commit/e262df3f75b22d1f1b74482bc73df7f0eaebf2d6))
+
+### Documentation
+
+* record the schema/data split and what a column name does not mean ([62142fd](https://github.com/amjadbouhouch/agent-board/commit/62142fd74bed3e45c8d2ae2aba858048d673b12d))
 ## [0.1.1](https://github.com/amjadbouhouch/agent-board/compare/v0.1.0...v0.1.1) (2026-09-02)
 
 ### Features

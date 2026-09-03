@@ -1,6 +1,6 @@
 {
   "name": "agent-board",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Open-source runtime for agent-created data applications — CLI and HTTP runtime",
   "license": "Apache-2.0",
