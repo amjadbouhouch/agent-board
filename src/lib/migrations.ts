@@ -23,7 +23,8 @@ export interface AppliedMigration {
 /** Platform-owned migration ledger, in the protected `_agentboard_` namespace. */
 const LEDGER_TABLE = "_agentboard_migrations";
 
-const PROTECTED_PREFIXES = ["_agentboard_", "_auth_", "_audit_"];
+/** Platform-owned namespaces, closed to both migrations and row writes. */
+export const PROTECTED_PREFIXES = ["_agentboard_", "_auth_", "_audit_"];
 
 /** Statements the CLI refuses inside agent-authored migrations. */
 const FORBIDDEN_SQL = [

@@ -8,6 +8,7 @@ import { cmdInspect } from "./commands/inspect.ts";
 import { cmdValidate } from "./commands/validate.ts";
 import { cmdMigrate } from "./commands/migrate.ts";
 import { cmdQuery } from "./commands/query.ts";
+import { cmdRows } from "./commands/rows.ts";
 import { cmdRunQuery } from "./commands/run-query.ts";
 import { RUN_QUERY_COMMAND } from "./server/execute.ts";
 import { cmdPublish } from "./commands/publish.ts";
@@ -27,6 +28,7 @@ Usage:
   agent-board validate <application.json>       Validate a specification against the DSL
   agent-board migrate <workspace>               Apply pending migrations (snapshots first)
   agent-board query <workspace> <sql|--saved n> Run a read-only query
+  agent-board rows <insert|update|delete> …     Write rows (see rows options)
   agent-board publish <workspace> <spec.json>   Validate and publish an application specification
   agent-board rollback <workspace> <version>    Republish an earlier application version
   agent-board export <workspace> [out.tar.gz]   Export a workspace as a tarball
@@ -41,6 +43,17 @@ Query options:
 Server options:
   --port <n>                  Port to listen on (default 4000, 0 picks a free one)
   --host <h>                  Hostname to bind (default localhost)
+
+Rows options:
+  --data <json>               Rows to insert, a JSON object or array
+  --data-file <path>          Read the rows to insert from a JSON file
+  --returning                 Return inserted rows, including generated keys
+  --set <col>=<value>         Column to write on update (repeatable)
+  --where <col><op><value>    Filter rows; ops != <= >= = < > ~ (~ is contains)
+  ...                         Use @null for SQL NULL; bare null is literal text
+  --apply <receipt>           Apply the change a preview described
+  --force                     Allow an applied change beyond the row cap
+  --json                      Emit a machine-readable result
 
 Publish options:
   --reason <message>          Recorded in the application version history
@@ -73,6 +86,8 @@ async function main(argv: string[]): Promise<number> {
       return cmdMigrate(args);
     case "query":
       return cmdQuery(args);
+    case "rows":
+      return cmdRows(args);
     case RUN_QUERY_COMMAND:
       return cmdRunQuery();
     case "publish":
