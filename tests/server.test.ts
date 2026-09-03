@@ -1,4 +1,6 @@
 import { test, expect, beforeEach, afterEach } from "bun:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
   applyMigration,
   createWorkspace,
@@ -408,5 +410,130 @@ test("POST rejects a malformed sort or offset", async () => {
     const response = await post("users", body);
     expect(response.status).toBe(400);
     expect(((await response.json()) as any).error).toBe("invalid_offset");
+  }
+});
+
+test("POST accepts a filter and narrows the result", async () => {
+  await publish([{ name: "users", sql: "SELECT name, plan FROM users" }]);
+  server = await startServer(project);
+
+  const body = await postJson("users", {
+    filter: [{ field: "plan", operator: "eq", value: "pro" }],
+    sort: ["name"],
+  });
+  expect(body.rows).toEqual([
+    { name: "Alice", plan: "pro" },
+    { name: "Carol", plan: "pro" },
+  ]);
+});
+
+test("POST rejects a filter field the query does not return", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const response = await post("users", {
+    filter: [{ field: "plan", operator: "eq", value: "pro" }],
+  });
+  expect(response.status).toBe(400);
+  expect(((await response.json()) as any).error).toBe("invalid_filter");
+});
+
+test("POST rejects a malformed filter", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const bad = [
+    { filter: "name" },
+    { filter: [] },
+    { filter: [{ field: "name" }] },
+    { filter: [{ field: "name", operator: "approximately", value: 1 }] },
+    { filter: [{ field: "name", operator: "eq", value: { nested: true } }] },
+  ];
+  for (const body of bad) {
+    const response = await post("users", body);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as any).error).toBe("invalid_filter");
+  }
+});
+
+/**
+ * Browser access. A page served from another origin cannot call this runtime
+ * unless the host names that origin, and it never gets a wildcard: `start`
+ * configures no authorize hook, so `*` would let any site the user visits read
+ * every workspace on their machine.
+ */
+test("no CORS headers unless the host allows the origin", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project);
+
+  const response = await fetch(`${server.url}/workspaces/${ws}/application`, {
+    headers: { origin: "http://localhost:5173" },
+  });
+  expect(response.headers.get("access-control-allow-origin")).toBeNull();
+});
+
+test("an allowed origin gets CORS headers and a preflight", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project, { allowedOrigins: ["http://localhost:5173"] });
+
+  const preflight = await fetch(`${server.url}/workspaces/${ws}/queries/users`, {
+    method: "OPTIONS",
+    headers: {
+      origin: "http://localhost:5173",
+      "access-control-request-method": "POST",
+      "access-control-request-headers": "content-type",
+    },
+  });
+  expect(preflight.status).toBe(204);
+  expect(preflight.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+  expect(preflight.headers.get("access-control-allow-headers")).toContain("content-type");
+
+  const query = await fetch(`${server.url}/workspaces/${ws}/queries/users`, {
+    method: "POST",
+    headers: { "content-type": "application/json", origin: "http://localhost:5173" },
+    body: JSON.stringify({}),
+  });
+  expect(query.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+  expect(query.headers.get("vary")).toBe("origin");
+});
+
+test("an origin outside the allowlist still gets nothing", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  server = await startServer(project, { allowedOrigins: ["http://localhost:5173"] });
+
+  const response = await fetch(`${server.url}/workspaces/${ws}/application`, {
+    headers: { origin: "http://evil.example" },
+  });
+  expect(response.headers.get("access-control-allow-origin")).toBeNull();
+});
+
+test("--static serves a UI from the same origin, which needs no CORS at all", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  const dir = project.path("ui");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "index.html"), "<!doctype html><title>Board</title>");
+  await writeFile(join(dir, "app.js"), "export const ready = true;");
+  server = await startServer(project, { staticDir: dir });
+
+  expect(await (await fetch(`${server.url}/`)).text()).toContain("<title>Board</title>");
+  expect(await (await fetch(`${server.url}/app.js`)).text()).toContain("ready");
+
+  // API routes still win over a file of the same name.
+  const api = await fetch(`${server.url}/workspaces/${ws}/application`);
+  expect(api.status).toBe(200);
+});
+
+test("a static path cannot escape the directory it serves", async () => {
+  await publish([{ name: "users", sql: "SELECT name FROM users" }]);
+  const dir = project.path("ui");
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "index.html"), "ok");
+  await writeFile(project.path("secret.txt"), "not for the web");
+  server = await startServer(project, { staticDir: dir });
+
+  for (const path of ["/../secret.txt", "/..%2Fsecret.txt", "/a/../../secret.txt"]) {
+    const response = await fetch(`${server.url}${path}`);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain("not for the web");
   }
 });

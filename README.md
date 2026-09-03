@@ -38,6 +38,10 @@ Commands: `agent-board help` · Scripts: `package.json` · Verify: `bun test && 
 - Applied changes land in `_audit_row_changes` with a before-image, which is what makes
   a delete recoverable; previews write nothing.
 - `@null` means SQL NULL in `--set` and `--where`; a bare `null` is the literal text.
+- `rows upsert --on-conflict <col>` inserts what is new and replaces what is not, so
+  re-loading the same export is a no-op rather than a UNIQUE violation. It applies
+  directly like insert — its scope is the batch you supplied — and records what it
+  replaced, so an overwrite is as recoverable as a delete.
 - `insert --returning` hands back each row as stored. It is the only way to learn a
   generated key — a `DEFAULT (lower(hex(randomblob(16))))` id leaves nothing to query
   back by. Off unless asked, so a bulk load is not held in memory twice.
@@ -69,6 +73,10 @@ renderer can page and re-sort without republishing.
   and says nothing about the rest — which is how a 460-row catalogue quietly becomes a
   100-row one.
 - `sort` is an array of result columns, `-name` for descending.
+- `filter` is an array of `{ field, operator, value }` joined with AND, with `operator`
+  one of `eq neq lt lte gt gte contains`. The same seven exist as symbols on the command
+  line — `= != < <= > >= ~` — so a condition means the same thing in either spelling.
+  `contains` uses `instr()`, not `LIKE`, so a literal `%` stays a `%`.
 - **`offset` is only meaningful with `sort`.** SQL has no inherent row order, so paging
   an unordered query repeats rows on one page and skips them on the next, with nothing
   to signal it.
@@ -79,6 +87,30 @@ renderer can page and re-sort without republishing.
   actually returns. That check is not defensive: SQLite resolves an unmatched
   double-quoted identifier to a *string literal*, so `ORDER BY "nope"` sorts every row
   by a constant and silently returns them unordered.
+
+## A filter control has to drive something
+
+A `filter` component declares `targets`, and it is required: a control the user can
+change to no effect is exactly what this DSL exists to reject. A target either narrows
+a component's result, or binds one of its declared query parameters — and the parameter
+is checked against the SQL, so a rename surfaces at validation rather than as an empty
+table.
+
+```json
+{ "id": "plan-filter", "type": "filter", "field": "plan", "control": "select",
+  "operator": "eq", "optionsQuery": "plans",
+  "targets": [{ "component": "orders-table" },
+              { "component": "revenue-chart", "parameter": "plan" }] }
+```
+
+## Serving a browser UI
+
+- `start --static <dir>` serves files for any request that matches no API route, which
+  makes a UI same-origin and removes the CORS question entirely. Paths that resolve
+  outside the directory are refused.
+- `start --cors <origin>` allows a cross-origin browser caller, repeatable. It **will
+  not accept `*`**: `start` configures no `authorize` hook, so every workspace is served
+  without restriction and a wildcard would let any page the user visits read all of them.
 
 ## Publish refuses on purpose
 

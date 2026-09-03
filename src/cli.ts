@@ -45,6 +45,8 @@ Query options:
 Server options:
   --port <n>                  Port to listen on (default 4000, 0 picks a free one)
   --host <h>                  Hostname to bind (default localhost)
+  --static <dir>              Also serve files from a directory, so a UI is same-origin
+  --cors <origin>             Allow browser calls from an origin (repeatable, no "*")
 
 Rows options:
   --data <json>               Rows to insert, a JSON object or array

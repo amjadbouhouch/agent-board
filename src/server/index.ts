@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
+import { join, normalize, resolve, sep } from "node:path";
 import { readMetadata, workspacePaths, type Workspace } from "../lib/workspace.ts";
 import { listApplicationVersionRecords, readCurrentApplication } from "../lib/application.ts";
 import { MAX_ROW_LIMIT, savedQueriesOf } from "../lib/queries.ts";
+import { FILTER_OPERATORS, type FilterOperator, type QueryFilter } from "../lib/filters.ts";
 import { DEFAULT_QUERY_TIMEOUT_MS, executeWithDeadline } from "./execute.ts";
 import { HttpError, badRequest, forbidden, notFound, payloadTooLarge } from "./errors.ts";
 
@@ -26,6 +28,17 @@ export interface AgentBoardOptions {
   authorize?(context: AuthorizeContext): boolean | Promise<boolean>;
   /** Per-query execution deadline in milliseconds. */
   queryTimeoutMs?: number;
+  /**
+   * Origins allowed to call this runtime from a browser.
+   *
+   * Empty by default, and never `*`: with no authorize hook configured, a
+   * wildcard would let any page the user happens to visit read every workspace
+   * off their machine. Serving the page from `staticDir` avoids the question
+   * entirely, since same-origin needs no CORS at all.
+   */
+  allowedOrigins?: string[];
+  /** Directory served for requests that match no API route. */
+  staticDir?: string;
 }
 
 export interface AgentBoard {
@@ -40,19 +53,75 @@ export interface AgentBoard {
 export function createAgentBoard(options: AgentBoardOptions): AgentBoard {
   return {
     async fetch(request: Request): Promise<Response> {
+      const origin = corsOrigin(options, request);
       try {
-        return await route(options, request);
+        if (request.method === "OPTIONS" && origin) return preflight(origin);
+        return withCors(await route(options, request), origin);
       } catch (error) {
-        if (error instanceof HttpError) return error.toResponse();
+        if (error instanceof HttpError) return withCors(error.toResponse(), origin);
         // Nothing internal reaches the client: log it, return an opaque 500.
         console.error("agent-board:", error);
-        return Response.json(
-          { error: "internal_error", message: "The runtime failed to handle this request." },
-          { status: 500 },
+        return withCors(
+          Response.json(
+            { error: "internal_error", message: "The runtime failed to handle this request." },
+            { status: 500 },
+          ),
+          origin,
         );
       }
     },
   };
+}
+
+/** The request's origin, when the host has allowed it. */
+function corsOrigin(options: AgentBoardOptions, request: Request): string | null {
+  const origin = request.headers.get("origin");
+  if (!origin) return null;
+  return options.allowedOrigins?.includes(origin) ? origin : null;
+}
+
+function withCors(response: Response, origin: string | null): Response {
+  if (!origin) return response;
+  const headers = new Headers(response.headers);
+  headers.set("access-control-allow-origin", origin);
+  // The allowlist is per-origin, so caches must not serve one origin's response
+  // to another.
+  headers.set("vary", "origin");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function preflight(origin: string): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "access-control-allow-origin": origin,
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "content-type",
+      "access-control-max-age": "600",
+      vary: "origin",
+    },
+  });
+}
+
+/**
+ * Serves a file from the configured directory.
+ *
+ * The resolved path must stay inside the root: `..` in a URL is the oldest way
+ * to read a file the server never meant to publish.
+ */
+async function serveStatic(root: string, pathname: string): Promise<Response | null> {
+  const base = resolve(root);
+  const requested = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
+  const target = resolve(join(base, normalize(requested)));
+  if (target !== base && !target.startsWith(base + sep)) return null;
+
+  const file = Bun.file(target);
+  if (!(await file.exists())) return null;
+  return new Response(file);
 }
 
 async function authorizeOrThrow(
@@ -123,6 +192,11 @@ async function route(options: AgentBoardOptions, request: Request): Promise<Resp
     }
   }
 
+  if (options.staticDir && (request.method === "GET" || request.method === "HEAD")) {
+    const file = await serveStatic(options.staticDir, url.pathname);
+    if (file) return file;
+  }
+
   throw notFound("not_found", `No route for ${request.method} ${url.pathname}.`);
 }
 
@@ -131,6 +205,7 @@ interface QueryRequestBody {
   limit?: number;
   offset?: number;
   sort?: string[];
+  filter?: QueryFilter[];
 }
 
 /**
@@ -237,6 +312,39 @@ function validateSort(value: unknown): string[] | undefined {
   });
 }
 
+/**
+ * Shape only — whether a field exists is decided by the query that runs, so
+ * that check happens there and comes back as `invalid_filter` too.
+ */
+function validateFilter(value: unknown): QueryFilter[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    throw badRequest("invalid_filter", "filter must be a non-empty array of conditions.");
+  }
+  return value.map((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw badRequest("invalid_filter", "each filter condition must be an object.");
+    }
+    const { field, operator, value: operand } = entry as Record<string, unknown>;
+    if (typeof field !== "string" || field.length === 0) {
+      throw badRequest("invalid_filter", "each filter condition needs a field.");
+    }
+    if (typeof operator !== "string" || !FILTER_OPERATORS.includes(operator as FilterOperator)) {
+      throw badRequest(
+        "invalid_filter",
+        `filter operator must be one of: ${FILTER_OPERATORS.join(", ")}.`,
+      );
+    }
+    if (operand !== null && !["string", "number", "boolean"].includes(typeof operand)) {
+      throw badRequest(
+        "invalid_filter",
+        `filter value for "${field}" must be a string, number, boolean or null.`,
+      );
+    }
+    return { field, operator: operator as FilterOperator, value: operand as QueryFilter["value"] };
+  });
+}
+
 async function readJsonBody(request: Request): Promise<QueryRequestBody> {
   const text = await readBodyText(request);
   if (text.trim().length === 0) return { parameters: {} };
@@ -257,6 +365,7 @@ async function readJsonBody(request: Request): Promise<QueryRequestBody> {
     limit: validateLimit(body.limit),
     offset: validateOffset(body.offset),
     sort: validateSort(body.sort),
+    filter: validateFilter(body.filter),
   };
 }
 
@@ -281,7 +390,13 @@ async function runSavedQuery(
   const result = await executeWithDeadline(
     ws,
     query.sql,
-    { parameters: body.parameters, limit: body.limit, offset: body.offset, sort: body.sort },
+    {
+      parameters: body.parameters,
+      limit: body.limit,
+      offset: body.offset,
+      sort: body.sort,
+      filter: body.filter,
+    },
     options.queryTimeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS,
   );
   return Response.json({

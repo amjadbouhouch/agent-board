@@ -1,4 +1,5 @@
 import { ParameterError, SortError, runQuery, type QueryOptions } from "../lib/queries.ts";
+import { FilterError } from "../lib/filters.ts";
 import type { Workspace } from "../lib/workspace.ts";
 
 export interface QueryJob {
@@ -27,8 +28,10 @@ export async function cmdRunQuery(): Promise<number> {
       JSON.stringify({
         ok: false,
         kind:
-          error instanceof SortError
-            ? "sort"
+          error instanceof FilterError
+            ? "filter"
+            : error instanceof SortError
+              ? "sort"
             : error instanceof ParameterError
               ? "parameter"
               : "query",

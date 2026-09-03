@@ -488,6 +488,99 @@ describe("rows", () => {
     });
   });
 
+  /**
+   * Upsert. Loading the same export twice is the ordinary case for a dashboard
+   * fed by a recurring file, and plain insert fails it on a UNIQUE violation.
+   */
+  describe("upsert", () => {
+    const upsert = (rows: unknown[], conflict = "id") =>
+      runCli(project.dir, [
+        "rows", "upsert", ws, "products", "--data", JSON.stringify(rows),
+        "--on-conflict", conflict,
+      ]);
+
+    test("inserts what is new and replaces what is not", async () => {
+      await seed([
+        { id: 1, name: "Keyboard", category: "hardware", price: 100 },
+        { id: 2, name: "Cable", category: "accessories", price: 200 },
+      ]);
+
+      const result = await upsert([
+        { id: 2, name: "Cable", category: "accessories", price: 250 },
+        { id: 3, name: "Monitor", category: "hardware", price: 300 },
+      ]);
+      expect(result.stderr).toBe("");
+      expect(result.code).toBe(0);
+
+      const rows = await rowsIn("products");
+      expect(rows.map((r) => r.price)).toEqual([100, 250, 300]);
+      expect(rows).toHaveLength(3);
+    });
+
+    test("loading the same file twice is a no-op rather than a violation", async () => {
+      const batch = [{ id: 1, name: "Keyboard", category: "hardware", price: 100 }];
+      expect((await upsert(batch)).code).toBe(0);
+      const second = await upsert(batch);
+      expect(second.code).toBe(0);
+      expect(await rowsIn("products")).toHaveLength(1);
+    });
+
+    test("records what it replaced, so an overwrite is recoverable", async () => {
+      await seed([{ id: 1, name: "Keyboard", category: "hardware", price: 100 }]);
+      await upsert([{ id: 1, name: "Keyboard", category: "hardware", price: 999 }]);
+
+      const audit = await rowsIn("_audit_row_changes");
+      const entry = audit.at(-1)!;
+      expect(entry.operation).toBe("upsert");
+      const before = JSON.parse(entry.before as string);
+      expect(before.rows).toHaveLength(1);
+      expect(before.rows[0]).toMatchObject({ id: 1, price: 100 });
+    });
+
+    test("needs to be told what identifies a row", async () => {
+      const result = await runCli(project.dir, [
+        "rows", "upsert", ws, "products",
+        "--data", JSON.stringify({ id: 1, name: "x", category: "hardware", price: 1 }),
+      ]);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("--on-conflict");
+    });
+
+    test("refuses a row that omits the identifying column", async () => {
+      const result = await upsert([{ name: "x", category: "hardware", price: 1 }]);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('missing "id"');
+    });
+
+    test("names an identifying column the table does not have", async () => {
+      const result = await upsert([{ id: 1, name: "x", category: "hardware", price: 1 }], "sku");
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("sku");
+    });
+
+    test("reports plainly when the columns carry no uniqueness constraint", async () => {
+      const result = await upsert(
+        [{ id: 1, name: "x", category: "hardware", price: 1 }],
+        "category",
+      );
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain("Upsert failed");
+      expect(result.stderr).not.toContain("SQLiteError");
+    });
+
+    test("--returning hands back the rows as stored", async () => {
+      const result = await runCli(project.dir, [
+        "rows", "upsert", ws, "products",
+        "--data", JSON.stringify({ id: 1, name: "Keyboard", category: "hardware", price: 100 }),
+        "--on-conflict", "id", "--returning", "--json",
+      ]);
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout).rows).toEqual([
+        { id: 1, name: "Keyboard", category: "hardware", price: 100, discontinued: null },
+      ]);
+    });
+  });
+
   describe("read-only path is unchanged", () => {
     test("query still refuses a write", async () => {
       const result = await runCli(project.dir, ["query", ws, "DELETE FROM products"]);

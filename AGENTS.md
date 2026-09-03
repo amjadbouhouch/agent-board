@@ -23,7 +23,7 @@ Bun only — `bun:sqlite` means this cannot run on Node at any version.
 
 `src/cli.ts` dispatches to one file per command in `src/commands/`. Business logic
 lives in `src/lib/`, and `src/server/` reuses that same `lib/` rather than
-reimplementing anything. There are five chokepoints, and the design depends on
+reimplementing anything. There are six chokepoints, and the design depends on
 edits going *through* them rather than around:
 
 - **`lib/application.ts` › `publishSpec()` is the only way an application version is
@@ -48,7 +48,13 @@ edits going *through* them rather than around:
   through it. Keeping that true is what makes a `node:sqlite` swap a one-file change.
 - **`server/index.ts` › `createAgentBoard()` is the whole HTTP surface**, returning a
   `fetch` handler. `agent-board start` is a thin wrapper that adds no routes and
-  configures no `authorize` hook.
+  configures no `authorize` hook. That is why `--cors` refuses `*` and why CORS is off
+  unless an origin is named: without a hook, a wildcard exposes every workspace to any
+  page the user visits. `--static` sidesteps it, since same-origin needs no CORS.
+- **`lib/filters.ts` is the one filter vocabulary.** Words in JSON, symbols on the
+  command line, mapped one to one, compiled to bound placeholders under a reserved
+  prefix so they cannot collide with a saved query's own parameters. `dsl.ts` validates
+  against the same list rather than keeping a second copy.
 
 The server does not run queries in-process. `server/execute.ts` re-invokes this same
 program as a child process via the internal `__run-query` subcommand (`commands/run-query.ts`),

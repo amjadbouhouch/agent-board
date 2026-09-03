@@ -1,4 +1,5 @@
 import { open, quoteIdent } from "./db.ts";
+import { compileQueryFilters, type QueryFilter } from "./filters.ts";
 import { CliError } from "./config.ts";
 
 /** A caller-supplied parameter problem, as opposed to a broken query. */
@@ -105,6 +106,8 @@ export interface QueryOptions {
   offset?: number;
   /** Result columns to order by, `-name` for descending. */
   sort?: string[];
+  /** Conditions on the result's columns, joined with AND. */
+  filter?: QueryFilter[];
   parameters?: Record<string, string | null>;
 }
 
@@ -141,14 +144,33 @@ function orderByClause(sort: string[], columns: string[]): string {
  * a placeholder would look like a declared parameter and be demanded from the
  * caller.
  */
-function shapeQuery(sql: string, columns: string[], sort: string[], offset: number): string | null {
-  const order = sort.length > 0 ? orderByClause(sort, columns) : "";
-  if (!order && offset === 0) return null;
-  return (
-    `SELECT * FROM (${sql})` +
-    (order ? ` ORDER BY ${order}` : "") +
-    (offset > 0 ? ` LIMIT -1 OFFSET ${offset}` : "")
-  );
+const FILTER_PREFIX = "__abf";
+
+interface Shaped {
+  sql: string;
+  bindings: Record<string, string | number | null>;
+}
+
+function shapeQuery(
+  sql: string,
+  columns: string[],
+  options: { sort: string[]; offset: number; filter: QueryFilter[] },
+): Shaped | null {
+  const order = options.sort.length > 0 ? orderByClause(options.sort, columns) : "";
+  const { clause, bindings } =
+    options.filter.length > 0
+      ? compileQueryFilters(options.filter, columns, FILTER_PREFIX)
+      : { clause: "", bindings: {} };
+
+  if (!order && !clause && options.offset === 0) return null;
+  return {
+    sql:
+      `SELECT * FROM (${sql})` +
+      (clause ? ` WHERE ${clause}` : "") +
+      (order ? ` ORDER BY ${order}` : "") +
+      (options.offset > 0 ? ` LIMIT -1 OFFSET ${options.offset}` : ""),
+    bindings,
+  };
 }
 
 /**
@@ -159,6 +181,14 @@ function shapeQuery(sql: string, columns: string[], sort: string[], offset: numb
 export function runQuery(ws: Workspace, sql: string, options: QueryOptions = {}): QueryResult {
   const violation = readOnlyViolation(sql);
   if (violation) throw new CliError(`Query ${violation}.`);
+
+  for (const name of declaredParameters(sql).keys()) {
+    if (name.startsWith(FILTER_PREFIX)) {
+      throw new CliError(
+        `Parameter ":${name}" uses the reserved prefix ":${FILTER_PREFIX}" — rename it.`,
+      );
+    }
+  }
 
   // A non-integer limit used to make the `rows.length >= limit` guard always
   // false, disabling the cap entirely, so anything unusable falls back.
@@ -179,13 +209,21 @@ export function runQuery(ws: Workspace, sql: string, options: QueryOptions = {})
   try {
     let statement = db.query(sql);
     const columns = statement.columnNames;
-    const bindings = bindParameters(sql, options.parameters ?? {});
+    let bindings = bindParameters(sql, options.parameters ?? {}) as Record<
+      string,
+      string | number | null
+    >;
 
     // Placeholders survive the wrap textually, so the bindings above still apply.
-    const shaped = shapeQuery(sql, columns, options.sort ?? [], offset);
+    const shaped = shapeQuery(sql, columns, {
+      sort: options.sort ?? [],
+      offset,
+      filter: options.filter ?? [],
+    });
     if (shaped) {
       statement.finalize();
-      statement = db.query(shaped);
+      statement = db.query(shaped.sql);
+      bindings = { ...bindings, ...shaped.bindings };
     }
 
     // Streamed rather than collected with.all(), so an enormous result set is

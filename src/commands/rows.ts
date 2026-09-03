@@ -6,6 +6,7 @@ import { formatTable } from "../lib/queries.ts";
 import {
   changeRows,
   insertRows,
+  upsertRows,
   FILTER_OPERATORS,
   NULL_TOKEN,
   type Filter,
@@ -16,6 +17,8 @@ import {
 const USAGE = `Usage:
   agent-board rows insert <workspace> <table> --data <json> | --data-file <path>
                                               [--returning]
+  agent-board rows upsert <workspace> <table> --data-file <path> --on-conflict <col>[,<col>]
+                                              [--returning]
   agent-board rows update <workspace> <table> --set <col>=<value> --where <col><op><value>
   agent-board rows delete <workspace> <table> --where <col><op><value>
 
@@ -25,6 +28,7 @@ Use ${NULL_TOKEN} for SQL NULL; a bare "null" is the literal text.`;
 /** Which flags each subcommand accepts, so a misplaced one is refused not ignored. */
 const ACCEPTS: Record<string, string[]> = {
   insert: ["--data", "--data-file", "--returning", "--json"],
+  upsert: ["--data", "--data-file", "--on-conflict", "--returning", "--json"],
   update: ["--set", "--where", "--apply", "--force", "--json"],
   delete: ["--where", "--apply", "--force", "--json"],
 };
@@ -38,6 +42,7 @@ interface Options {
   apply?: string;
   force: boolean;
   returning: boolean;
+  conflict: string[];
   json: boolean;
   /** Every flag actually seen, so it can be checked against the subcommand. */
   seen: string[];
@@ -76,7 +81,7 @@ function parseFilter(token: string): Filter {
 
 function parseOptions(args: string[]): Options {
   const options: Options = {
-    positional: [], set: {}, filters: [], force: false, returning: false,
+    positional: [], set: {}, filters: [], force: false, returning: false, conflict: [],
     json: false, seen: [],
   };
   for (let i = 0; i < args.length; i++) {
@@ -93,6 +98,12 @@ function parseOptions(args: string[]): Options {
       case "--apply": options.apply = next(); break;
       case "--force": options.force = true; break;
       case "--returning": options.returning = true; break;
+      case "--on-conflict":
+        options.conflict = next()
+          .split(",")
+          .map((name) => name.trim())
+          .filter(Boolean);
+        break;
       case "--json": options.json = true; break;
       case "--where": options.filters.push(parseFilter(next())); break;
       case "--set": {
@@ -154,7 +165,12 @@ function report(result: MutationResult, json: boolean): void {
   }
   const noun = result.affected === 1 ? "row" : "rows";
   if (result.applied) {
-    const verb = { insert: "Inserted", update: "Updated", delete: "Deleted" }[result.operation];
+    const verb = {
+      insert: "Inserted",
+      upsert: "Upserted",
+      update: "Updated",
+      delete: "Deleted",
+    }[result.operation];
     console.log(`${verb} ${result.affected} ${noun} in "${result.table}".`);
     if (result.rows?.length) {
       console.log();
@@ -189,6 +205,18 @@ export async function cmdRows(args: string[]): Promise<number> {
   if (sub === "insert") {
     report(
       insertRows(ws, { table, rows: await readRows(options), returning: options.returning }),
+      options.json,
+    );
+    return 0;
+  }
+  if (sub === "upsert") {
+    report(
+      upsertRows(ws, {
+        table,
+        rows: await readRows(options),
+        conflict: options.conflict,
+        returning: options.returning,
+      }),
       options.json,
     );
     return 0;

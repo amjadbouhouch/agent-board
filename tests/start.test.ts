@@ -106,3 +106,28 @@ test("the application keeps working after every agent-side process has exited", 
     "rollback to v1",
   ]);
 });
+
+test("start refuses a wildcard CORS origin", async () => {
+  // `start` configures no authorize hook, so every workspace is served without
+  // restriction. A wildcard would let any page the user visits read all of them.
+  const project = await newProject();
+  try {
+    const result = await runCli(project.dir, ["start", "--cors", "*"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("--static");
+    expect(result.stderr).toContain("without restriction");
+  } finally {
+    await project.cleanup();
+  }
+});
+
+test("start refuses a static directory that does not exist", async () => {
+  const project = await newProject();
+  try {
+    const result = await runCli(project.dir, ["start", "--static", "./nowhere"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("Directory not found");
+  } finally {
+    await project.cleanup();
+  }
+});

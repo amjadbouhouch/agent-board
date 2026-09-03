@@ -1,5 +1,6 @@
 import { loadConfig, workspacesRoot, CliError } from "../lib/config.ts";
 import { openWorkspace, type Workspace } from "../lib/workspace.ts";
+import { parseFilterToken, type QueryFilter } from "../lib/filters.ts";
 import { readCurrentApplication } from "../lib/application.ts";
 import {
   DEFAULT_ROW_LIMIT,
@@ -26,6 +27,7 @@ export async function cmdQuery(args: string[]): Promise<number> {
   let limit = DEFAULT_ROW_LIMIT;
   let offset = 0;
   const sort: string[] = [];
+  const filter: QueryFilter[] = [];
   const parameters: Record<string, string> = {};
   let asJson = false;
   for (let i = 0; i < args.length; i++) {
@@ -50,6 +52,10 @@ export async function cmdQuery(args: string[]): Promise<number> {
       if (!Number.isInteger(offset) || offset < 0) {
         throw new CliError(`--offset must be a whole count of rows to skip, got "${raw}".`);
       }
+    } else if (arg === "--filter") {
+      const raw = args[++i];
+      if (raw === undefined) throw new CliError("--filter requires <column><operator><value>.");
+      filter.push(parseFilterToken(raw));
     } else if (arg === "--sort") {
       const raw = args[++i];
       if (raw === undefined) throw new CliError("--sort requires a column name.");
@@ -84,7 +90,7 @@ export async function cmdQuery(args: string[]): Promise<number> {
   const ws = openWorkspace(workspacesRoot(config), id);
   const sql = saved ? await resolveSavedQuery(ws, saved) : inlineSql!;
 
-  const result = runQuery(ws, sql, { limit, offset, sort, parameters });
+  const result = runQuery(ws, sql, { limit, offset, sort, filter, parameters });
 
   if (asJson) {
     console.log(

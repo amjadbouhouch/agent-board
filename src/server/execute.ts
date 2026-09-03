@@ -87,5 +87,8 @@ export async function executeWithDeadline(
   if (message.kind === "sort") {
     throw badRequest("invalid_sort", String(message.message));
   }
+  if (message.kind === "filter") {
+    throw badRequest("invalid_filter", String(message.message));
+  }
   throw new HttpError(500, "query_failed", String(message.message ?? "Query failed."));
 }

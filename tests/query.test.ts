@@ -276,3 +276,82 @@ test("sorting a parameterised query keeps its parameters working", async () => {
   expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name))
    .toEqual(["Carol", "Alice"]);
 });
+
+/**
+ * Filtering. The runtime composes the condition from a field, an operator and a
+ * bound value, so a component can narrow its own data without the renderer
+ * fetching everything and sifting it in the browser.
+ */
+test("--filter narrows on equality", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, "SELECT name, plan FROM users", "--filter", "plan=pro", "--sort", "name", "--json",
+  ]);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name))
+   .toEqual(["Alice", "Carol"]);
+});
+
+test("filters combine with AND", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, "SELECT name, plan FROM users",
+    "--filter", "plan=pro", "--filter", "name!=Alice", "--json",
+  ]);
+  expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name)).toEqual(["Carol"]);
+});
+
+test("contains means contains, without wildcards of its own", async () => {
+  // instr() rather than LIKE: a literal % must not behave as a wildcard.
+  const percent = await runCli(project.dir, [
+    "query", ws, "SELECT name FROM users", "--filter", "name~%", "--json",
+  ]);
+  expect(JSON.parse(percent.stdout).rowCount).toBe(0);
+
+  const real = await runCli(project.dir, [
+    "query", ws, "SELECT name FROM users", "--filter", "name~ar", "--json",
+  ]);
+  expect(JSON.parse(real.stdout).rows.map((r: { name: string }) => r.name)).toEqual(["Carol"]);
+});
+
+test("@null filters on SQL NULL, and only with eq or neq", async () => {
+  await runCli(project.dir, [
+    "rows", "insert", ws, "users",
+    "--data", JSON.stringify({ id: "u4", name: "Dave", plan: null }),
+  ]);
+
+  const missing = await runCli(project.dir, [
+    "query", ws, "SELECT name, plan FROM users", "--filter", "plan=@null", "--json",
+  ]);
+  expect(JSON.parse(missing.stdout).rows.map((r: { name: string }) => r.name)).toEqual(["Dave"]);
+
+  const refused = await runCli(project.dir, [
+    "query", ws, "SELECT name, plan FROM users", "--filter", "plan~@null",
+  ]);
+  expect(refused.code).toBe(1);
+  expect(refused.stderr).toContain("use eq or neq");
+});
+
+test("a filter field the query does not return is refused", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, "SELECT name FROM users", "--filter", "plan=pro",
+  ]);
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("Cannot filter on \"plan\"");
+  expect(result.stderr).toContain("name");
+});
+
+test("filtering a parameterised query keeps its parameters bound", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, "SELECT name, plan FROM users WHERE plan = :plan",
+    "--param", "plan=pro", "--filter", "name~Ali", "--json",
+  ]);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout).rows.map((r: { name: string }) => r.name)).toEqual(["Alice"]);
+});
+
+test("a saved query may not use the reserved placeholder prefix", async () => {
+  const result = await runCli(project.dir, [
+    "query", ws, "SELECT name FROM users WHERE name = :__abf0", "--param", "__abf0=Alice",
+  ]);
+  expect(result.code).toBe(1);
+  expect(result.stderr).toContain("reserved prefix");
+});

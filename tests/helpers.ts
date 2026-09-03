@@ -120,6 +120,8 @@ export async function startServer(
   options: {
     authorize?: (context: unknown) => boolean | Promise<boolean>;
     queryTimeoutMs?: number;
+    allowedOrigins?: string[];
+    staticDir?: string;
   } = {},
 ): Promise<RunningServer> {
   const { createAgentBoard } = await import("../src/server/index.ts");

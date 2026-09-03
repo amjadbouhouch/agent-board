@@ -25,7 +25,7 @@ const AUDIT_IMAGE_LIMIT = 1000;
 
 const AUDIT_TABLE = "_audit_row_changes";
 
-export type Operation = "insert" | "update" | "delete";
+export type Operation = "insert" | "upsert" | "update" | "delete";
 
 /**
  * Ordered longest-first so a scan matching left to right cannot stop on the
@@ -366,6 +366,124 @@ export function insertRows(ws: Workspace, options: InsertOptions): MutationResul
   } finally {
     db.close();
   }
+}
+
+export interface UpsertOptions extends InsertOptions {
+  /** Columns identifying an existing row. Must match a PRIMARY KEY or UNIQUE constraint. */
+  conflict: string[];
+}
+
+/**
+ * Inserts rows, replacing any that already exist under `conflict`.
+ *
+ * Applies directly, like insert: the scope is exactly the batch the caller
+ * supplied, not a filter that might match more than they pictured. What it
+ * *replaces* is recorded first, so an overwrite is as recoverable as a delete.
+ */
+export function upsertRows(ws: Workspace, options: UpsertOptions): MutationResult {
+  assertWritableTable(options.table);
+  if (options.rows.length === 0) throw new CliError("No rows to upsert.");
+  if (options.conflict.length === 0) {
+    throw new CliError(
+      "Upsert needs --on-conflict <column>[,<column>] naming the columns that identify a row.",
+    );
+  }
+
+  const db = open(ws.dbPath);
+  try {
+    const table = describeTable(db, options.table);
+    for (const name of options.conflict) columnOf(table, name);
+
+    const prepared = options.rows.map((row, i) => {
+      if (typeof row !== "object" || row === null || Array.isArray(row)) {
+        throw new CliError(`Row ${i + 1} must be a JSON object.`);
+      }
+      const values: Record<string, Binding> = {};
+      for (const name of Object.keys(row)) {
+        values[name] = coerce(row[name], columnOf(table, name), `Row ${i + 1}`);
+      }
+      for (const key of options.conflict) {
+        if (!(key in values)) {
+          throw new CliError(`Row ${i + 1} is missing "${key}", which identifies the row.`);
+        }
+      }
+      return values;
+    });
+
+    const replaced = existingRows(db, table, options.conflict, prepared);
+    ensureAudit(db);
+
+    const stored: Record<string, unknown>[] = [];
+    db.transaction(() => {
+      for (const row of prepared) {
+        const names = Object.keys(row);
+        const updates = names.filter((name) => !options.conflict.includes(name));
+        const action =
+          updates.length > 0
+            ? `DO UPDATE SET ${updates.map((n) => `${quoteIdent(n)} = excluded.${quoteIdent(n)}`).join(", ")}`
+            : "DO NOTHING";
+        const sql =
+          `INSERT INTO ${quoteIdent(table.name)} (${names.map(quoteIdent).join(", ")}) ` +
+          `VALUES (${names.map(() => "?").join(", ")}) ` +
+          `ON CONFLICT (${options.conflict.map(quoteIdent).join(", ")}) ${action}` +
+          (options.returning ? " RETURNING *" : "");
+        const statement = db.prepare<Record<string, unknown>, Binding[]>(sql);
+        const bindings = names.map((name) => row[name]!);
+        if (options.returning) stored.push(...statement.all(...bindings));
+        else statement.run(...bindings);
+      }
+      recordAudit(
+        db,
+        table.name,
+        "upsert",
+        prepared.length,
+        null,
+        { supplied: prepared.length, replaced: replaced.length, conflict: options.conflict },
+        replaced,
+      );
+    }).immediate();
+
+    return {
+      operation: "upsert",
+      table: table.name,
+      affected: prepared.length,
+      applied: true,
+      ...(options.returning ? { rows: stored } : {}),
+    };
+  } catch (error) {
+    throw asCliError(error, "Upsert");
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * The rows a batch is about to replace, read before anything is written so the
+ * audit entry can carry what was there.
+ */
+function existingRows(
+  db: Database,
+  table: TableInfo,
+  conflict: string[],
+  rows: Record<string, Binding>[],
+): Record<string, unknown>[] {
+  const keys = conflict.map(quoteIdent).join(", ");
+  const found: Record<string, unknown>[] = [];
+  // Chunked so a large batch cannot exceed SQLite's bound-variable limit.
+  const perChunk = Math.max(1, Math.floor(500 / conflict.length));
+  for (let i = 0; i < rows.length; i += perChunk) {
+    const chunk = rows.slice(i, i + perChunk);
+    const tuples = chunk.map(() => `(${conflict.map(() => "?").join(", ")})`).join(", ");
+    const bindings = chunk.flatMap((row) => conflict.map((name) => row[name]!));
+    found.push(
+      ...db
+        .query<Record<string, unknown>, Binding[]>(
+          `SELECT * FROM ${quoteIdent(table.name)} WHERE (${keys}) IN (VALUES ${tuples})`,
+        )
+        .all(...bindings),
+    );
+  }
+  return found;
 }
 
 export interface ChangeOptions {

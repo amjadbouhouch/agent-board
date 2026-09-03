@@ -132,7 +132,8 @@ test("the fully specified components every renderer needs still validate", async
     { id: "t", type: "data_table", title: "T", source: SOURCE, filter: { field: "a", operator: "lt", value: 0.8 } },
     { id: "b", type: "bar_chart", title: "B", source: SOURCE, mapping: { x: "a", y: "a" }, format: { y: "percent" } },
     { id: "l", type: "line_chart", title: "L", source: SOURCE, mapping: { x: "a", y: "a" } },
-    { id: "f", type: "filter", field: "a", control: "select", label: "A", optionsQuery: "q" },
+    { id: "f", type: "filter", field: "a", control: "select", label: "A", optionsQuery: "q",
+      operator: "eq", targets: [{ component: "t" }] },
   ]);
 
   expect(result.stderr).toBe("");
@@ -203,4 +204,124 @@ test("a negative or fractional offset is rejected", async () => {
     expect(result.stderr).toContain("source.offset");
     expect(result.code).toBe(1);
   }
+});
+
+test("a source may declare the rows it wants", async () => {
+  const result = await validateWith([
+    {
+      id: "t", type: "data_table", title: "T",
+      source: { ...SOURCE, filter: [{ field: "a", operator: "gte", value: 10 }] },
+    },
+  ]);
+  expect(result.stderr).toBe("");
+  expect(result.code).toBe(0);
+});
+
+test("a malformed source filter is rejected", async () => {
+  const bad: unknown[] = [
+    "a=1",
+    [],
+    [{ field: "a" }],
+    [{ field: "a", operator: "approximately", value: 1 }],
+    [{ field: "a", operator: "eq", value: 1, extra: true }],
+  ];
+  for (const filter of bad) {
+    const result = await validateWith([
+      { id: "t", type: "data_table", title: "T", source: { ...SOURCE, filter } },
+    ]);
+    expect(result.stderr).toContain("source.filter");
+    expect(result.code).toBe(1);
+  }
+});
+
+/**
+ * A filter control has to say what it drives. One that names nothing renders a
+ * control the user can change to no effect, which is the class of failure this
+ * validator exists to catch.
+ */
+test("a filter without targets is rejected", async () => {
+  const result = await validateWith([
+    { id: "t", type: "data_table", title: "T", source: SOURCE },
+    { id: "f", type: "filter", field: "a", control: "select" },
+  ]);
+  expect(result.stderr).toContain("targets");
+  expect(result.code).toBe(1);
+});
+
+test("a target may be declared after the filter that names it", async () => {
+  const result = await validateWith([
+    { id: "f", type: "filter", field: "a", control: "select", targets: [{ component: "t" }] },
+    { id: "t", type: "data_table", title: "T", source: SOURCE },
+  ]);
+  expect(result.stderr).toBe("");
+  expect(result.code).toBe(0);
+});
+
+test("a target must be a component on the same page", async () => {
+  const result = await validateWith([
+    { id: "t", type: "data_table", title: "T", source: SOURCE },
+    { id: "f", type: "filter", field: "a", control: "select", targets: [{ component: "ghost" }] },
+  ]);
+  expect(result.stderr).toContain("must name a component on this page");
+  expect(result.stderr).toContain("t, f");
+  expect(result.code).toBe(1);
+});
+
+test("a filter cannot target itself", async () => {
+  const result = await validateWith([
+    { id: "f", type: "filter", field: "a", control: "select", targets: [{ component: "f" }] },
+  ]);
+  expect(result.stderr).toContain("cannot target itself");
+  expect(result.code).toBe(1);
+});
+
+test("a target that reads no data cannot be filtered", async () => {
+  const result = await validateWith([
+    { id: "g", type: "filter", field: "a", control: "text", targets: [{ component: "f" }] },
+    { id: "f", type: "filter", field: "a", control: "select", targets: [{ component: "g" }] },
+  ]);
+  expect(result.stderr).toContain("reads no data");
+  expect(result.code).toBe(1);
+});
+
+test("binding a target parameter checks the target's query declares it", async () => {
+  const spec = {
+    ...BASE,
+    savedQueries: [{ name: "q", sql: "SELECT 1 AS a WHERE 1 = :wanted" }],
+    pages: [{
+      id: "p", type: "dashboard", title: "P",
+      components: [
+        { id: "t", type: "data_table", title: "T", source: { type: "saved_query", query: "q" } },
+        { id: "f", type: "filter", field: "a", control: "select",
+          targets: [{ component: "t", parameter: "missing" }] },
+      ],
+    }],
+  };
+  await project.write("s.json", spec);
+  const result = await runCli(project.dir, ["validate", "s.json"]);
+
+  expect(result.stderr).toContain('declares no parameter "missing"');
+  expect(result.stderr).toContain("wanted");
+  expect(result.code).toBe(1);
+});
+
+test("a filter bound to a declared parameter validates", async () => {
+  const spec = {
+    ...BASE,
+    savedQueries: [{ name: "q", sql: "SELECT 1 AS a WHERE 1 = :wanted" }],
+    pages: [{
+      id: "p", type: "dashboard", title: "P",
+      components: [
+        { id: "t", type: "data_table", title: "T",
+          source: { type: "saved_query", query: "q", parameters: { wanted: "1" } } },
+        { id: "f", type: "filter", field: "a", control: "select",
+          targets: [{ component: "t", parameter: "wanted" }] },
+      ],
+    }],
+  };
+  await project.write("s.json", spec);
+  const result = await runCli(project.dir, ["validate", "s.json"]);
+
+  expect(result.stderr).toBe("");
+  expect(result.code).toBe(0);
 });
